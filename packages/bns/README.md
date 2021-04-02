@@ -13,9 +13,7 @@ state without relying on any central points of control.
 npm install --save @stacks/bns
 ```
 
-## Usage
-
-### `can-register-name`
+## Example Usage
 
 ```
 import { canRegisterName } = from '@stacks/bns';
@@ -26,22 +24,5 @@ const network = new StacksMainnet();
 const result = await canRegisterName('name.id', network);
 ```
 
-### `get-namespace-price`
-```
-import { get } = from '@stacks/bns';
-import { StacksTestnet } = from '@stacks/network';
-
-const network = new StacksMainnet();
-
-const result = await canRegisterName('name.id', network);
-```
-
-### `get-name-price`
-```
-import { get } = from '@stacks/bns';
-import { StacksTestnet } = from '@stacks/network';
-
-const network = new StacksMainnet();
-
-const result = await canRegisterName('name.id', network);
-```
+## Docs
+[Library Reference](https://github.com/blockstack/stacks.js/blob/feat/bns-package/packages/bns/docs/modules.md)
