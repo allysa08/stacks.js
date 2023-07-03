@@ -68,6 +68,7 @@ export interface NamedIdentityType {
   idAddress: string;
   privateKey: string;
   index: number;
+  // eslint-disable-next-line @typescript-eslint/ban-types
   profile: Object;
   profileUrl: string;
 }
@@ -184,7 +185,7 @@ async function makeAuthPage(
   hubUrl: string,
   manifest: any,
   authRequest: AuthRequestType,
-  ids: Array<NamedIdentityType>
+  ids: NamedIdentityType[]
 ): Promise<string> {
   let signinBody = SIGNIN_HEADER;
   const signinDescription = SIGNIN_DESC.replace(/{appName}/, manifest.name || '(Unknown app)');
@@ -261,7 +262,7 @@ async function loadNamedIdentitiesLoop(
 export function loadNamedIdentities(
   network: CLINetworkAdapter,
   mnemonic: string
-): Promise<Array<NamedIdentityType>> {
+): Promise<NamedIdentityType[]> {
   return loadNamedIdentitiesLoop(network, mnemonic, 0, []);
 }
 
@@ -288,6 +289,7 @@ async function loadUnnamedIdentity(
 /*
  * Send a JSON HTTP response
  */
+// eslint-disable-next-line @typescript-eslint/ban-types
 function sendJSON(res: express.Response, data: Object, statusCode: number) {
   logger.info(`Respond ${statusCode}: ${JSON.stringify(data)}`);
   res.writeHead(statusCode, { 'Content-Type': 'application/json' });
@@ -307,7 +309,7 @@ async function getIdentityInfo(
   _appGaiaHub: string,
   _profileGaiaHub: string
 ): Promise<NamedIdentityType[]> {
-  network.setCoerceMainnetAddress(true); // for lookups in regtest
+  network.setCoerceMainnetAddress(false);
   let identities: NamedIdentityType[];
 
   try {
@@ -411,14 +413,14 @@ export async function handleAuth(
       mnemonic,
       gaiaHubUrl,
       appManifest,
-      decodedAuthPayload as AuthRequestType,
+      decodedAuthPayload as unknown as AuthRequestType,
       identities
     );
 
     res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Length': authPage.length });
     res.write(authPage);
     res.end();
-  } catch (e) {
+  } catch (e: any) {
     if (!errorMsg) {
       errorMsg = e.message;
     }

@@ -1,3 +1,25 @@
+import { lookupProfile, NAME_LOOKUP_PATH, UserSession } from '@stacks/auth';
+import {
+  BLOCKSTACK_DEFAULT_GAIA_HUB_URL,
+  DoesNotExist,
+  GaiaHubError,
+  getGlobalObject,
+  InvalidStateError,
+  megabytesToBytes,
+  PayloadTooLargeError,
+  SignatureVerificationError,
+  utf8ToBytes,
+} from '@stacks/common';
+import {
+  eciesGetJsonStringLength,
+  EncryptionOptions,
+  getPublicKeyFromPrivate,
+  publicKeyToBtcAddress,
+  signECDSA,
+  verifyECDSA,
+} from '@stacks/encryption';
+import { createFetchFn, FetchFn } from '@stacks/network';
+import { FileContentLoader } from './fileContentLoader';
 import {
   connectToGaiaHub,
   deleteFromGaiaHub,
@@ -7,31 +29,6 @@ import {
   getFullReadUrl,
   uploadToGaiaHub,
 } from './hub';
-
-import {
-  eciesGetJsonStringLength,
-  EncryptionOptions,
-  getPublicKeyFromPrivate,
-  publicKeyToAddress,
-  signECDSA,
-  verifyECDSA,
-} from '@stacks/encryption';
-
-import {
-  BLOCKSTACK_DEFAULT_GAIA_HUB_URL,
-  DoesNotExist,
-  fetchPrivate,
-  GaiaHubError,
-  getGlobalObject,
-  InvalidStateError,
-  megabytesToBytes,
-  PayloadTooLargeError,
-  SignatureVerificationError,
-} from '@stacks/common';
-
-import { FileContentLoader } from './fileContentLoader';
-
-import { lookupProfile, NAME_LOOKUP_PATH, UserSession } from '@stacks/auth';
 
 /**
  * Specify a valid MIME type, encryption options, and whether to sign the [[UserSession.putFile]].
@@ -274,11 +271,12 @@ export class Storage {
     app: string,
     username: string | undefined,
     zoneFileLookupURL: string | undefined,
-    forceText: boolean
+    forceText: boolean,
+    fetchFn: FetchFn = createFetchFn()
   ): Promise<string | ArrayBuffer | null> {
     const opts = { app, username, zoneFileLookupURL };
     const readUrl = await this.getFileUrl(path, opts);
-    const response = await fetchPrivate(readUrl);
+    const response = await fetchFn(readUrl);
     if (!response.ok) {
       throw await getBlockstackErrorFromResponse(response, `getFile ${path} failed.`, null);
     }
@@ -324,20 +322,19 @@ export class Storage {
         this.getGaiaAddress(opt.app!, opt.username, opt.zoneFileLookupURL),
       ]);
 
-      if (!fileContents) {
-        return fileContents;
-      }
-      if (!gaiaAddress) {
+      if (!fileContents) return fileContents;
+
+      if (!gaiaAddress)
         throw new SignatureVerificationError(
-          'Failed to get gaia address for verification of: ' + `${path}`
+          `Failed to get gaia address for verification of: ${path}`
         );
-      }
-      if (!signatureContents || typeof signatureContents !== 'string') {
+
+      if (!signatureContents || typeof signatureContents !== 'string')
         throw new SignatureVerificationError(
           'Failed to obtain signature for file: ' +
             `${path} -- looked in ${path}${SIGNATURE_FILE_SUFFIX}`
         );
-      }
+
       let signature;
       let publicKey;
       try {
@@ -345,40 +342,39 @@ export class Storage {
         signature = sigObject.signature;
         publicKey = sigObject.publicKey;
       } catch (err) {
-        if (err instanceof SyntaxError) {
+        if (err instanceof SyntaxError)
           throw new Error(
-            'Failed to parse signature content JSON ' +
-              `(path: ${path}${SIGNATURE_FILE_SUFFIX})` +
-              ' The content may be corrupted.'
+            `Failed to parse signature content JSON (path: ${path}${SIGNATURE_FILE_SUFFIX}) The content may be corrupted.`
           );
-        } else {
-          throw err;
-        }
-      }
-      const signerAddress = publicKeyToAddress(publicKey);
-      if (gaiaAddress !== signerAddress) {
-        throw new SignatureVerificationError(
-          `Signer pubkey address (${signerAddress}) doesn't` +
-            ` match gaia address (${gaiaAddress})`
-        );
-      } else if (!verifyECDSA(fileContents, publicKey, signature)) {
-        throw new SignatureVerificationError(
-          'Contents do not match ECDSA signature: ' +
-            `path: ${path}, signature: ${path}${SIGNATURE_FILE_SUFFIX}`
-        );
-      } else {
-        return fileContents;
-      }
-    } catch (err) {
-      // For missing .sig files, throw `SignatureVerificationError` instead of `DoesNotExist` error.
-      if (err instanceof DoesNotExist && err.message.indexOf(sigPath) >= 0) {
-        throw new SignatureVerificationError(
-          'Failed to obtain signature for file: ' +
-            `${path} -- looked in ${path}${SIGNATURE_FILE_SUFFIX}`
-        );
-      } else {
         throw err;
       }
+      const signerAddress = publicKeyToBtcAddress(publicKey);
+      if (gaiaAddress !== signerAddress)
+        throw new SignatureVerificationError(
+          `Signer pubkey address (${signerAddress}) doesn't match gaia address (${gaiaAddress})`
+        );
+
+      if (
+        !verifyECDSA(
+          typeof fileContents === 'string'
+            ? utf8ToBytes(fileContents)
+            : new Uint8Array(fileContents),
+          publicKey,
+          signature
+        )
+      ) {
+        throw new SignatureVerificationError(
+          `Contents do not match ECDSA signature: path: ${path}, signature: ${path}${SIGNATURE_FILE_SUFFIX}`
+        );
+      }
+      return fileContents;
+    } catch (err) {
+      // For missing .sig files, throw `SignatureVerificationError` instead of `DoesNotExist` error.
+      if (err instanceof DoesNotExist && err.message.indexOf(sigPath) >= 0)
+        throw new SignatureVerificationError(
+          `Failed to obtain signature for file: ${path} -- looked in ${path}${SIGNATURE_FILE_SUFFIX}`
+        );
+      throw err;
     }
   }
 
@@ -396,20 +392,17 @@ export class Storage {
     privateKey?: string,
     username?: string,
     zoneFileLookupURL?: string
-  ): Promise<string | Buffer> {
+  ): Promise<string | Uint8Array> {
     const appPrivateKey = privateKey || this.userSession.loadUserData().appPrivateKey;
 
     const appPublicKey = getPublicKeyFromPrivate(appPrivateKey);
 
-    let address: string;
-    if (username) {
-      address = await this.getGaiaAddress(app, username, zoneFileLookupURL);
-    } else {
-      address = publicKeyToAddress(appPublicKey);
-    }
+    const address: string = username
+      ? await this.getGaiaAddress(app, username, zoneFileLookupURL)
+      : publicKeyToBtcAddress(appPublicKey);
     if (!address) {
       throw new SignatureVerificationError(
-        'Failed to get gaia address for verification of: ' + `${path}`
+        `Failed to get gaia address for verification of: ${path}`
       );
     }
     let sigObject;
@@ -418,9 +411,7 @@ export class Storage {
     } catch (err) {
       if (err instanceof SyntaxError) {
         throw new Error(
-          'Failed to parse encrypted, signed content JSON. The content may not ' +
-            'be encrypted. If using getFile, try passing' +
-            ' { verify: false, decrypt: false }.'
+          'Failed to parse encrypted, signed content JSON. The content may not be encrypted. If using getFile, try passing { verify: false, decrypt: false }.'
         );
       } else {
         throw err;
@@ -429,19 +420,19 @@ export class Storage {
     const signature = sigObject.signature;
     const signerPublicKey = sigObject.publicKey;
     const cipherText = sigObject.cipherText;
-    const signerAddress = publicKeyToAddress(signerPublicKey);
+    const signerAddress = publicKeyToBtcAddress(signerPublicKey);
 
     if (!signerPublicKey || !cipherText || !signature) {
       throw new SignatureVerificationError(
-        'Failed to get signature verification data from file:' + ` ${path}`
+        `Failed to get signature verification data from file: ${path}`
       );
     } else if (signerAddress !== address) {
       throw new SignatureVerificationError(
-        `Signer pubkey address (${signerAddress}) doesn't` + ` match gaia address (${address})`
+        `Signer pubkey address (${signerAddress}) doesn't match gaia address (${address})`
       );
     } else if (!verifyECDSA(cipherText, signerPublicKey, signature)) {
       throw new SignatureVerificationError(
-        'Contents do not match ECDSA signature in file:' + ` ${path}`
+        `Contents do not match ECDSA signature in file: ${path}`
       );
     } else if (typeof privateKey === 'string') {
       const decryptOpt = { privateKey };
@@ -454,7 +445,7 @@ export class Storage {
   /**
    * Stores the data provided in the app's data store to to the file specified.
    * @param {String} path - the path to store the data in
-   * @param {String|Buffer} content - the data to store in the file
+   * @param {String|Uint8Array} content - the data to store in the file
    * @param options a [[PutFileOptions]] object
    *
    * @returns {Promise} that resolves if the operation succeed and rejects
@@ -462,7 +453,7 @@ export class Storage {
    */
   async putFile(
     path: string,
-    content: string | Buffer | ArrayBufferView | Blob,
+    content: string | Uint8Array | ArrayBufferView | Blob,
     options?: PutFileOptions
   ): Promise<string> {
     const defaults: PutFileOptions = {
@@ -558,7 +549,7 @@ export class Storage {
       };
     } else {
       // In all other cases, we only need one upload.
-      let contentForUpload: string | Buffer | Blob;
+      let contentForUpload: string | Uint8Array | Blob;
       if (!opt.encrypt && !opt.sign) {
         // If content does not need encrypted or signed, it can be passed directly
         // to the fetch request without loading into memory.
@@ -604,7 +595,7 @@ export class Storage {
 
     try {
       return await uploadFn(gaiaHubConfig);
-    } catch (error) {
+    } catch (error: any) {
       // If the upload fails on first attempt, it could be due to a recoverable
       // error which may succeed by refreshing the config and retrying.
       if (isRecoverableGaiaError(error)) {
@@ -634,29 +625,32 @@ export class Storage {
   ) {
     const gaiaHubConfig = await this.getOrSetLocalGaiaHubConnection();
     const opts = Object.assign({}, options);
-    const sessionData = this.userSession.store.getSessionData();
     if (opts.wasSigned) {
       // If signed, delete both the content file and the .sig file
       try {
         await deleteFromGaiaHub(path, gaiaHubConfig);
         await deleteFromGaiaHub(`${path}${SIGNATURE_FILE_SUFFIX}`, gaiaHubConfig);
+        const sessionData = this.userSession.store.getSessionData();
         delete sessionData.etags![path];
         this.userSession.store.setSessionData(sessionData);
       } catch (error) {
         const freshHubConfig = await this.setLocalGaiaHubConnection();
         await deleteFromGaiaHub(path, freshHubConfig);
         await deleteFromGaiaHub(`${path}${SIGNATURE_FILE_SUFFIX}`, gaiaHubConfig);
+        const sessionData = this.userSession.store.getSessionData();
         delete sessionData.etags![path];
         this.userSession.store.setSessionData(sessionData);
       }
     } else {
       try {
         await deleteFromGaiaHub(path, gaiaHubConfig);
+        const sessionData = this.userSession.store.getSessionData();
         delete sessionData.etags![path];
         this.userSession.store.setSessionData(sessionData);
       } catch (error) {
         const freshHubConfig = await this.setLocalGaiaHubConnection();
         await deleteFromGaiaHub(path, freshHubConfig);
+        const sessionData = this.userSession.store.getSessionData();
         delete sessionData.etags![path];
         this.userSession.store.setSessionData(sessionData);
       }
@@ -692,7 +686,8 @@ export class Storage {
     page: string | null,
     callCount: number,
     fileCount: number,
-    callback: (name: string) => boolean
+    callback: (name: string) => boolean,
+    fetchFn: FetchFn = createFetchFn()
   ): Promise<number> {
     if (callCount > 65536) {
       // this is ridiculously huge, and probably indicates
@@ -713,10 +708,7 @@ export class Storage {
         },
         body: pageRequest,
       };
-      response = await fetchPrivate(
-        `${hubConfig.server}/list-files/${hubConfig.address}`,
-        fetchOptions
-      );
+      response = await fetchFn(`${hubConfig.server}/list-files/${hubConfig.address}`, fetchOptions);
       if (!response.ok) {
         throw await getBlockstackErrorFromResponse(response, 'ListFiles failed.', hubConfig);
       }
@@ -831,6 +823,21 @@ export class Storage {
   }
 }
 
+type FileUrlOptions = {
+  path: string;
+  username: string;
+  appOrigin: string;
+  zoneFileLookupURL: string;
+};
+export function getUserAppFileUrl(options: FileUrlOptions): Promise<string | undefined> {
+  return new Storage({}).getUserAppFileUrl(
+    options.path,
+    options.username,
+    options.appOrigin,
+    options.zoneFileLookupURL
+  );
+}
+
 /**
  * @param {Object} [options=null] - options object
  * @param {String} options.username - the Blockstack ID to lookup for multi-player storage
@@ -864,7 +871,7 @@ function normalizeOptions<T>(
       }
       const sessionData = userSession.store.getSessionData();
       // Use the user specified coreNode if available, otherwise use the app specified coreNode.
-      const configuredCoreNode = sessionData.userData!.coreNode || userSession.appConfig.coreNode;
+      const configuredCoreNode = sessionData.userData?.coreNode || userSession.appConfig.coreNode;
       if (configuredCoreNode) {
         opts.zoneFileLookupURL = `${configuredCoreNode}${NAME_LOOKUP_PATH}`;
       }

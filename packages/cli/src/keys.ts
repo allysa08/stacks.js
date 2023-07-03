@@ -1,22 +1,32 @@
 // TODO: most of this code should be in blockstack.js
 // Will remove most of this code once the wallet functionality is there instead.
 
-import * as blockstack from 'blockstack';
-import * as bitcoin from 'bitcoinjs-lib';
-import * as bip39 from 'bip39';
-
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const c32check = require('c32check');
 
-import { getPrivateKeyAddress } from './utils';
+import { HDKey } from '@scure/bip32';
+import * as scureBip39 from '@scure/bip39';
+import { bytesToHex } from '@stacks/common';
 
-import { getMaxIDSearchIndex } from './cli';
+import {
+  compressPrivateKey,
+  getPublicKeyFromPrivate,
+  publicKeyToBtcAddress,
+} from '@stacks/encryption';
+import { DerivationType, deriveAccount, generateWallet, getRootNode } from '@stacks/wallet-sdk';
+import * as bip32 from 'bip32';
+import * as bip39 from 'bip39';
+import * as blockstack from 'blockstack';
+import * as wif from 'wif';
 
+import { getMaxIDSearchIndex, getPrivateKeyAddress } from './common';
 import { CLINetworkAdapter } from './network';
 
-import * as bip32 from 'bip32';
-import { BIP32Interface } from 'bip32';
+const BITCOIN_PUBKEYHASH = 0;
+const BITCOIN_PUBKEYHASH_TESTNET = 111;
+const BITCOIN_WIF = 128;
+const BITCOIN_WIF_TESTNET = 239;
 
-export const STRENGTH = 128; // 12 words
 export const STX_WALLET_COMPATIBLE_SEED_STRENGTH = 256;
 export const DERIVATION_PATH = "m/44'/5757'/0'/0/0";
 
@@ -40,6 +50,7 @@ export type StacksKeyInfoType = {
   privateKey: string;
   address: string;
   btcAddress: string;
+  wif: string;
   index: number;
 };
 
@@ -60,10 +71,6 @@ async function walletFromMnemonic(mnemonic: string): Promise<blockstack.Blocksta
   return new blockstack.BlockstackWallet(bip32.fromSeed(seed));
 }
 
-function getNodePrivateKey(node: BIP32Interface): string {
-  return blockstack.ecPairToHexString(bitcoin.ECPair.fromPrivateKey(node.privateKey!));
-}
-
 /*
  * Get the owner key information for a 12-word phrase, at a specific index.
  * @network (object) the blockstack network
@@ -82,15 +89,20 @@ export async function getOwnerKeyInfo(
   index: number,
   version: string = 'v0.10-current'
 ): Promise<OwnerKeyInfoType> {
-  const wallet = await walletFromMnemonic(mnemonic);
-  const identity = wallet.getIdentityAddressNode(index);
-  const addr = network.coerceAddress(blockstack.BlockstackWallet.getAddressFromBIP32Node(identity));
-  const privkey = getNodePrivateKey(identity);
+  const wallet = await generateWallet({ secretKey: mnemonic, password: '' });
+  const account = deriveAccount({
+    rootNode: getRootNode(wallet),
+    salt: wallet.salt,
+    stxDerivationType: DerivationType.Wallet,
+    index,
+  });
+  const publicKey = getPublicKeyFromPrivate(account.dataPrivateKey);
+  const addr = network.coerceAddress(publicKeyToBtcAddress(publicKey));
   return {
-    privateKey: privkey,
-    version: version,
-    index: index,
+    privateKey: account.dataPrivateKey + '01',
     idAddress: `ID-${addr}`,
+    version,
+    index,
   } as OwnerKeyInfoType;
 }
 
@@ -132,37 +144,32 @@ export async function getPaymentKeyInfo(
  */
 export async function getStacksWalletKeyInfo(
   network: CLINetworkAdapter,
-  mnemonic: string
+  mnemonic: string,
+  derivationPath = DERIVATION_PATH
 ): Promise<StacksKeyInfoType> {
-  const seed = await bip39.mnemonicToSeed(mnemonic);
-  const master = bip32.fromSeed(seed);
-  const child = master.derivePath("m/44'/5757'/0'/0/0"); // taken from stacks-wallet. See https://github.com/blockstack/stacks-wallet
-  const ecPair = bitcoin.ECPair.fromPrivateKey(child.privateKey!);
-  const privkey = blockstack.ecPairToHexString(ecPair);
+  const seed = await scureBip39.mnemonicToSeed(mnemonic);
+  const master = HDKey.fromMasterSeed(seed);
+  const child = master.derive(derivationPath);
+  const pubkey = Buffer.from(child.publicKey!);
+  const privkeyBuffer = Buffer.from(child.privateKey!);
+  const privkey = bytesToHex(compressPrivateKey(privkeyBuffer));
+  const wifVersion = network.isTestnet() ? BITCOIN_WIF_TESTNET : BITCOIN_WIF;
+  const walletImportFormat = wif.encode(wifVersion, privkeyBuffer, true);
 
   const addr = getPrivateKeyAddress(network, privkey);
-  let btcAddress: string;
-  if (network.isTestnet()) {
-    // btcAddress = const { address } = bitcoin.payments.p2pkh({ pubkey: keyPair.publicKey });
-    const { address } = bitcoin.payments.p2pkh({
-      pubkey: ecPair.publicKey,
-      network: bitcoin.networks.regtest,
-    });
-    btcAddress = address!;
-  } else {
-    const { address } = bitcoin.payments.p2pkh({
-      pubkey: ecPair.publicKey,
-      network: bitcoin.networks.bitcoin,
-    });
-    btcAddress = address!;
-  }
-  const result: StacksKeyInfoType = {
+  const btcAddress = publicKeyToBtcAddress(
+    pubkey,
+    network.isTestnet() ? BITCOIN_PUBKEYHASH_TESTNET : BITCOIN_PUBKEYHASH
+  );
+
+  return {
     privateKey: privkey,
+    publicKey: pubkey.toString('hex'),
     address: c32check.b58ToC32(addr),
     btcAddress,
+    wif: walletImportFormat,
     index: 0,
-  };
-  return result;
+  } as StacksKeyInfoType;
 }
 
 /*
@@ -184,14 +191,20 @@ export async function findIdentityIndex(
     throw new Error('Not an identity address');
   }
 
-  const wallet = await walletFromMnemonic(mnemonic);
-  for (let i = 0; i < maxIndex; i++) {
-    const identity = wallet.getIdentityAddressNode(i);
-    const addr = blockstack.BlockstackWallet.getAddressFromBIP32Node(identity);
+  const wallet = await generateWallet({ secretKey: mnemonic, password: '' });
+  const needle = network.coerceAddress(idAddress.slice(3));
 
-    if (network.coerceAddress(addr) === network.coerceAddress(idAddress.slice(3))) {
-      return i;
-    }
+  for (let i = 0; i < maxIndex; i++) {
+    const account = deriveAccount({
+      rootNode: getRootNode(wallet),
+      salt: wallet.salt,
+      stxDerivationType: DerivationType.Wallet,
+      index: i,
+    });
+    const publicKey = getPublicKeyFromPrivate(account.dataPrivateKey);
+    const address = network.coerceAddress(publicKeyToBtcAddress(publicKey));
+
+    if (address === needle) return i;
   }
 
   return -1;

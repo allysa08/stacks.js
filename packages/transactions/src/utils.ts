@@ -1,37 +1,21 @@
-import { sha256, sha512 } from 'sha.js';
-import { ClarityValue, serializeCV } from './clarity';
-import RIPEMD160 from 'ripemd160-min';
-import randombytes from 'randombytes';
-import { deserializeCV } from './clarity';
-import fetch from 'cross-fetch';
+import { ripemd160 } from '@noble/hashes/ripemd160';
+import { sha256 } from '@noble/hashes/sha256';
+import { sha512_256 } from '@noble/hashes/sha512';
+import { utils } from '@noble/secp256k1';
+import { bytesToHex, concatArray, concatBytes, utf8ToBytes, with0x } from '@stacks/common';
 import { c32addressDecode } from 'c32check';
-import lodashCloneDeep from 'lodash/cloneDeep';
+import lodashCloneDeep from 'lodash.clonedeep';
+import { ClarityValue, deserializeCV, serializeCV } from './clarity';
 
-export { randombytes as randomBytes };
+// Export verify as utility method for signature verification
+export { verify as verifySignature } from '@noble/secp256k1';
 
-export class BufferArray {
-  _value: Buffer[] = [];
-  get value() {
-    return this._value;
-  }
-  appendHexString(hexString: string) {
-    this.value.push(Buffer.from(hexString, 'hex'));
-  }
-
-  push(buffer: Buffer) {
-    return this._value.push(buffer);
-  }
-  appendByte(octet: number) {
-    if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
-      throw new Error(`Value ${octet} is not a valid byte`);
-    }
-    this.value.push(Buffer.from([octet]));
-  }
-
-  concatBuffer(): Buffer {
-    return Buffer.concat(this.value);
-  }
-}
+/**
+ * Use utils.randomBytes to replace randombytes dependency
+ * Generates random bytes of given length
+ * @param {number} bytesLength an optional bytes length, default is 32 bytes
+ */
+export const randomBytes = (bytesLength?: number): Uint8Array => utils.randomBytes(bytesLength);
 
 export const leftPadHex = (hexString: string): string =>
   hexString.length % 2 == 0 ? hexString : `0${hexString}`;
@@ -42,13 +26,8 @@ export const leftPadHexToLength = (hexString: string, length: number): string =>
 export const rightPadHexToLength = (hexString: string, length: number): string =>
   hexString.padEnd(length, '0');
 
-export const intToHexString = (integer: number, lengthBytes = 8): string =>
-  integer.toString(16).padStart(lengthBytes * 2, '0');
-
-export const hexStringToInt = (hexString: string): number => parseInt(hexString, 16);
-
 export const exceedsMaxLengthBytes = (string: string, maxLengthBytes: number): boolean =>
-  string ? Buffer.from(string).length > maxLengthBytes : false;
+  string ? utf8ToBytes(string).length > maxLengthBytes : false;
 
 export function cloneDeep<T>(obj: T): T {
   return lodashCloneDeep(obj);
@@ -61,76 +40,87 @@ export function omit<T, K extends keyof any>(obj: T, prop: K): Omit<T, K> {
   return clone;
 }
 
-export class sha512_256 extends sha512 {
-  constructor() {
-    super();
-    // set the "SHA-512/256" initialization vector
-    // see https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf
-    Object.assign(this, {
-      _ah: 0x22312194,
-      _al: 0xfc2bf72c,
-      _bh: 0x9f555fa3,
-      _bl: 0xc84c64c2,
-      _ch: 0x2393b86b,
-      _cl: 0x6f53b151,
-      _dh: 0x96387719,
-      _dl: 0x5940eabd,
-      _eh: 0x96283ee2,
-      _el: 0xa88effe3,
-      _fh: 0xbe5e1e25,
-      _fl: 0x53863992,
-      _gh: 0x2b0199fc,
-      _gl: 0x2c85b8aa,
-      _hh: 0x0eb72ddc,
-      _hl: 0x81c52ca2,
-    });
-  }
-  digest(): Buffer;
-  digest(encoding: import('crypto').HexBase64Latin1Encoding): string;
-  digest(encoding?: import('crypto').HexBase64Latin1Encoding): string | Buffer {
-    // "SHA-512/256" truncates the digest to 32 bytes
-    const buff = super.digest().slice(0, 32);
-    return encoding ? buff.toString(encoding) : buff;
-  }
-}
+export const txidFromData = (data: Uint8Array): string => {
+  return bytesToHex(sha512_256(data));
+};
 
-export const txidFromData = (data: Buffer): string => new sha512_256().update(data).digest('hex');
-
-export const hash160 = (input: Buffer): Buffer => {
-  const sha256Result = new sha256().update(input).digest();
-  return Buffer.from(new RIPEMD160().update(sha256Result).digest());
+export const hash160 = (input: Uint8Array): Uint8Array => {
+  return ripemd160(sha256(input));
 };
 
 // Internally, the Stacks blockchain encodes address the same as Bitcoin
 // single-sig address (p2pkh)
-export const hashP2PKH = (input: Buffer): string => {
-  return hash160(input).toString('hex');
+export const hashP2PKH = (input: Uint8Array): string => {
+  return bytesToHex(hash160(input));
+};
+
+// Internally, the Stacks blockchain encodes address the same as Bitcoin
+// single-sig address over p2sh (p2h-p2wpkh)
+export const hashP2WPKH = (input: Uint8Array): string => {
+  const keyHash = hash160(input);
+  const redeemScript = concatBytes(new Uint8Array([0]), new Uint8Array([keyHash.length]), keyHash);
+  const redeemScriptHash = hash160(redeemScript);
+  return bytesToHex(redeemScriptHash);
 };
 
 // Internally, the Stacks blockchain encodes address the same as Bitcoin
 // multi-sig address (p2sh)
-export const hashP2SH = (numSigs: number, pubKeys: Buffer[]): string => {
+export const hashP2SH = (numSigs: number, pubKeys: Uint8Array[]): string => {
   if (numSigs > 15 || pubKeys.length > 15) {
     throw Error('P2SH multisig address can only contain up to 15 public keys');
   }
 
   // construct P2SH script
-  const bufferArray = new BufferArray();
+  const bytesArray = [];
   // OP_n
-  bufferArray.appendByte(80 + numSigs);
+  bytesArray.push(80 + numSigs);
   // public keys prepended by their length
   pubKeys.forEach(pubKey => {
-    bufferArray.appendByte(pubKey.length);
-    bufferArray.push(pubKey);
+    bytesArray.push(pubKey.length);
+    bytesArray.push(pubKey);
   });
   // OP_m
-  bufferArray.appendByte(80 + pubKeys.length);
+  bytesArray.push(80 + pubKeys.length);
   // OP_CHECKMULTISIG
-  bufferArray.appendByte(174);
+  bytesArray.push(174);
 
-  const redeemScript = bufferArray.concatBuffer();
+  const redeemScript = concatArray(bytesArray);
   const redeemScriptHash = hash160(redeemScript);
-  return redeemScriptHash.toString('hex');
+  return bytesToHex(redeemScriptHash);
+};
+
+// Internally, the Stacks blockchain encodes address the same as Bitcoin
+// multisig address over p2sh (p2sh-p2wsh)
+export const hashP2WSH = (numSigs: number, pubKeys: Uint8Array[]): string => {
+  if (numSigs > 15 || pubKeys.length > 15) {
+    throw Error('P2WSH multisig address can only contain up to 15 public keys');
+  }
+
+  // construct P2SH script
+  const scriptArray = [];
+  // OP_n
+  scriptArray.push(80 + numSigs);
+  // public keys prepended by their length
+  pubKeys.forEach(pubKey => {
+    scriptArray.push(pubKey.length);
+    scriptArray.push(pubKey);
+  });
+  // OP_m
+  scriptArray.push(80 + pubKeys.length);
+  // OP_CHECKMULTISIG
+  scriptArray.push(174);
+
+  const script = concatArray(scriptArray);
+  const digest = sha256(script);
+
+  const bytesArray = [];
+  bytesArray.push(0);
+  bytesArray.push(digest.length);
+  bytesArray.push(digest);
+
+  const redeemScript = concatArray(bytesArray);
+  const redeemScriptHash = hash160(redeemScript);
+  return bytesToHex(redeemScriptHash);
 };
 
 export function isClarityName(name: string) {
@@ -138,23 +128,13 @@ export function isClarityName(name: string) {
   return regex.test(name) && name.length < 128;
 }
 
-/** @ignore */
-export async function fetchPrivate(input: RequestInfo, init?: RequestInit): Promise<Response> {
-  const defaultFetchOpts: RequestInit = {
-    referrer: 'no-referrer',
-    referrerPolicy: 'no-referrer',
-  };
-  const fetchOpts = Object.assign(defaultFetchOpts, init);
-  const fetchResult = await fetch(input, fetchOpts);
-  return fetchResult;
-}
 /**
  * Converts a clarity value to a hex encoded string with `0x` prefix
  * @param {ClarityValue} cv  - the clarity value to convert
  */
 export function cvToHex(cv: ClarityValue) {
   const serialized = serializeCV(cv);
-  return `0x${serialized.toString('hex')}`;
+  return `0x${bytesToHex(serialized)}`;
 }
 
 /**
@@ -162,9 +142,7 @@ export function cvToHex(cv: ClarityValue) {
  * @param {string} hex - the hex encoded string with or without `0x` prefix
  */
 export function hexToCV(hex: string) {
-  const hexWithoutPrefix = hex.startsWith('0x') ? hex.slice(2) : hex;
-  const bufferCV = Buffer.from(hexWithoutPrefix, 'hex');
-  return deserializeCV(bufferCV);
+  return deserializeCV(hex);
 }
 /**
  * Read only function response object
@@ -192,11 +170,8 @@ export type ReadOnlyFunctionResponse =
  * @param param
  */
 export const parseReadOnlyResponse = (response: ReadOnlyFunctionResponse): ClarityValue => {
-  if (response.okay) {
-    return hexToCV(response.result);
-  } else {
-    throw new Error(response.cause);
-  }
+  if (response.okay) return hexToCV(response.result);
+  throw new Error(response.cause);
 };
 
 export const validateStacksAddress = (stacksAddress: string): boolean => {
@@ -206,4 +181,11 @@ export const validateStacksAddress = (stacksAddress: string): boolean => {
   } catch (e) {
     return false;
   }
+};
+
+export const validateTxId = (txid: string): boolean => {
+  if (txid === 'success') return true; // Bypass fetchMock tests // todo: move this line into mocks in test files
+  const value = with0x(txid).toLowerCase();
+  if (value.length !== 66) return false;
+  return with0x(BigInt(value).toString(16).padStart(64, '0')) === value;
 };

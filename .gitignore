@@ -47,3 +47,12 @@ dist
 .rts2_cache_umd/
 .idea
 
+*.tsbuildinfo
+
+# auto-generated typedoc
+docs
+
+# from previous .npmignore
+unused
+
+*.tgz

@@ -1,8 +1,7 @@
-import { ECPair } from 'bitcoinjs-lib';
 import { decodeToken, SECP256K1Client, TokenSigner, TokenVerifier } from 'jsontokens';
 import { TokenInterface } from 'jsontokens/lib/decode';
 import { nextYear, makeUUID4 } from '@stacks/common';
-import { ecPairToAddress } from '@stacks/encryption';
+import { getAddressFromPublicKey } from '@stacks/transactions';
 
 /**
  * Signs a profile token
@@ -103,20 +102,12 @@ export function verifyProfileToken(token: string, publicKeyOrAddress: string): T
     throw new Error("Token doesn't have a claim");
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-  const issuerPublicKey = (payload.issuer as Record<string, string>).publicKey as string;
-  const publicKeyBuffer = Buffer.from(issuerPublicKey, 'hex');
-
-  const compressedKeyPair = ECPair.fromPublicKey(publicKeyBuffer, { compressed: true });
-  const compressedAddress = ecPairToAddress(compressedKeyPair);
-  const uncompressedKeyPair = ECPair.fromPublicKey(publicKeyBuffer, { compressed: false });
-  const uncompressedAddress = ecPairToAddress(uncompressedKeyPair);
+  const issuerPublicKey = (payload.issuer as Record<string, string>).publicKey;
+  const address = getAddressFromPublicKey(issuerPublicKey);
 
   if (publicKeyOrAddress === issuerPublicKey) {
     // pass
-  } else if (publicKeyOrAddress === compressedAddress) {
-    // pass
-  } else if (publicKeyOrAddress === uncompressedAddress) {
+  } else if (publicKeyOrAddress === address) {
     // pass
   } else {
     throw new Error('Token issuer public key does not match the verifying value');
@@ -162,7 +153,7 @@ export function extractProfile(
       throw new Error('Unexpected token payload type of string');
     }
     if (payload.hasOwnProperty('claim')) {
-      profile = payload.claim as object;
+      profile = payload.claim as Record<string, any>;
     }
   }
 

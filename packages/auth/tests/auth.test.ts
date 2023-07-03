@@ -8,7 +8,6 @@ import {
   isIssuanceDateValid,
   doSignaturesMatchPublicKeys,
   doPublicKeysMatchIssuer,
-  doPublicKeysMatchUsername,
   isManifestUriValid,
   isRedirectUriValid,
   verifyAuthRequestAndLoadManifest,
@@ -18,7 +17,11 @@ import {
   lookupProfile,
 } from '../src';
 
-import { makeECPrivateKey, getPublicKeyFromPrivate, publicKeyToAddress } from '@stacks/encryption';
+import {
+  makeECPrivateKey,
+  getPublicKeyFromPrivate,
+  publicKeyToBtcAddress,
+} from '@stacks/encryption';
 
 import { sampleProfiles, sampleNameRecords, sampleTokenFiles } from './sampleData';
 
@@ -30,19 +33,18 @@ beforeEach(() => {
 
 const privateKey = 'a5c61c6ca7b3e7e55edee68566aeab22e4da26baa285c7bd10e8d2218aa3b229';
 const publicKey = '027d28f9951ce46538951e3697c62588a87f1f1f295de4a14fdd4c780fc52cfe69';
-const nameLookupURL = 'https://core.blockstack.org/v1/names/';
 
 test('makeAuthRequest && verifyAuthRequest', async () => {
   const appConfig = new AppConfig(['store_write'], 'http://localhost:3000');
   const blockstack = new UserSession({ appConfig });
 
-  const authRequest = blockstack.makeAuthRequest(privateKey);
+  const authRequest = blockstack.makeAuthRequestToken(privateKey);
   expect(authRequest).toBeTruthy();
 
   const decodedToken = decodeToken(authRequest);
   expect(decodedToken).toBeTruthy();
 
-  const address = publicKeyToAddress(publicKey);
+  const address = publicKeyToBtcAddress(publicKey);
   const referenceDID = makeDIDFromAddress(address);
   const origin = 'http://localhost:3000';
   expect((decodedToken.payload as any).iss).toEqual(referenceDID);
@@ -90,7 +92,7 @@ test('make and verify auth request with extraParams', async () => {
   const appConfig = new AppConfig(['store_write'], 'http://localhost:3000');
   const blockstack = new UserSession({ appConfig });
 
-  const authRequest = blockstack.makeAuthRequest(
+  const authRequest = blockstack.makeAuthRequestToken(
     privateKey,
     undefined,
     undefined,
@@ -115,7 +117,7 @@ test('invalid auth request - signature not verified', async () => {
   const appConfig = new AppConfig(['store_write'], 'http://localhost:3000');
   const blockstack = new UserSession({ appConfig });
 
-  const authRequest = blockstack.makeAuthRequest(privateKey);
+  const authRequest = blockstack.makeAuthRequestToken(privateKey);
   const invalidAuthRequest = authRequest.substring(0, authRequest.length - 1);
 
   expect(doSignaturesMatchPublicKeys(invalidAuthRequest)).toEqual(false);
@@ -138,7 +140,7 @@ test('invalid auth request - invalid redirect uri', async () => {
   appConfig.redirectURI = () => 'https://example.com'; // monkey patch for test
   const blockstack = new UserSession({ appConfig });
 
-  const invalidAuthRequest = blockstack.makeAuthRequest(privateKey);
+  const invalidAuthRequest = blockstack.makeAuthRequestToken(privateKey);
   expect(isRedirectUriValid(invalidAuthRequest)).toBe(false);
 
   await verifyAuthRequest(invalidAuthRequest).then(verified => {
@@ -157,7 +159,7 @@ test('invalid auth request - invalid manifest uri', async () => {
   const appConfig = new AppConfig(['store_write'], 'http://localhost:3000');
   appConfig.manifestURI = () => 'https://example.com/manifest.json'; // monkey patch for test
   const blockstack = new UserSession({ appConfig });
-  const invalidAuthRequest = blockstack.makeAuthRequest(privateKey);
+  const invalidAuthRequest = blockstack.makeAuthRequestToken(privateKey);
 
   expect(isManifestUriValid(invalidAuthRequest)).toBe(false);
 
@@ -167,22 +169,25 @@ test('invalid auth request - invalid manifest uri', async () => {
 });
 
 test('makeAuthResponse && verifyAuthResponse', async () => {
-  const authResponse = await makeAuthResponse(privateKey, sampleProfiles.ryan, null, null);
+  const authResponse = await makeAuthResponse(privateKey, sampleProfiles.ryan, null);
   expect(authResponse).toBeTruthy();
 
   const decodedToken = decodeToken(authResponse);
+
   expect(decodedToken).toBeTruthy();
 
-  const address = publicKeyToAddress(publicKey);
+  const address = publicKeyToBtcAddress(publicKey);
   const referenceDID = makeDIDFromAddress(address);
   expect((decodedToken.payload as any).iss).toEqual(referenceDID);
 
   expect(JSON.stringify((decodedToken.payload as any).profile)).toEqual(
     JSON.stringify(sampleProfiles.ryan)
   );
-  expect((decodedToken.payload as any).username).toBe(null);
 
-  await verifyAuthResponse(authResponse, nameLookupURL).then(verifiedResult => {
+  // username was removed from payload
+  expect('username' in (decodedToken.payload as any)).toBeFalsy();
+
+  await verifyAuthResponse(authResponse).then(verifiedResult => {
     expect(verifiedResult).toBe(true);
   });
 
@@ -190,26 +195,67 @@ test('makeAuthResponse && verifyAuthResponse', async () => {
   expect(isIssuanceDateValid(authResponse)).toBe(true);
   expect(doSignaturesMatchPublicKeys(authResponse)).toBe(true);
   expect(doPublicKeysMatchIssuer(authResponse)).toBe(true);
+});
 
-  await doPublicKeysMatchUsername(authResponse, nameLookupURL).then(verifiedResult => {
-    expect(verifiedResult).toBe(true);
-  });
+test('auth response with invalid or empty appPrivateKeyFromWalletSalt', async () => {
+  let appPrivateKeyFromWalletSalt1;
+  const authResponse = await makeAuthResponse(
+    privateKey,
+    sampleProfiles.ryan,
+    null,
+    null,
+    null,
+    undefined,
+    null,
+    null,
+    null,
+    null,
+    appPrivateKeyFromWalletSalt1
+  );
+  expect(authResponse).toBeTruthy();
+  const decodedToken = decodeToken(authResponse);
+  console.log('decodedToken', decodedToken);
+  expect(decodedToken).toBeTruthy();
+  expect((decodedToken.payload as any).appPrivateKeyFromWalletSalt).toBeNull();
+});
+
+test('auth response with valid appPrivateKeyFromWalletSalt', async () => {
+  const appPrivateKeyFromWalletSalt =
+    'ab9a2ad092b910902f4a74f7aeaee874497ed9bc3f6408ed8b07e22425471fde';
+  const authResponse = await makeAuthResponse(
+    privateKey,
+    sampleProfiles.ryan,
+    null,
+    null,
+    null,
+    undefined,
+    null,
+    null,
+    null,
+    null,
+    appPrivateKeyFromWalletSalt
+  );
+  expect(authResponse).toBeTruthy();
+
+  const decodedToken = decodeToken(authResponse);
+  console.log('decodedToken', decodedToken);
+
+  expect(decodedToken).toBeTruthy();
+  expect((decodedToken.payload as any).appPrivateKeyFromWalletSalt).toEqual(
+    appPrivateKeyFromWalletSalt
+  );
 });
 
 test('auth response with username', async () => {
   fetchMock.mockResponse(JSON.stringify(sampleNameRecords.ryan));
 
-  const authResponse = await makeAuthResponse(privateKey, sampleProfiles.ryan, 'ryan.id', null);
+  const authResponse = await makeAuthResponse(privateKey, sampleProfiles.ryan, null);
 
-  await doPublicKeysMatchUsername(authResponse, nameLookupURL).then(verified => {
-    expect(verified).toBe(true);
-  });
-
-  await verifyAuthResponse(authResponse, nameLookupURL).then(verifiedResult => {
+  await verifyAuthResponse(authResponse).then(verifiedResult => {
     expect(verifiedResult).toBe(true);
   });
 
-  expect(fetchMock.mock.calls.length).toEqual(2);
+  expect(fetchMock.mock.calls.length).toEqual(0);
 });
 
 test('auth response with invalid private key', async () => {
@@ -228,7 +274,6 @@ test('auth response with invalid private key', async () => {
   const authResponse = await makeAuthResponse(
     privateKey,
     sampleProfiles.ryan,
-    'ryan.id',
     metadata,
     undefined,
     appPrivateKey,
@@ -256,8 +301,6 @@ test('auth response with invalid private key', async () => {
 });
 
 test('handlePendingSignIn with authResponseToken', async () => {
-  const url = `${nameLookupURL}ryan.id`;
-
   fetchMock.mockResponse(JSON.stringify(sampleNameRecords.ryan));
 
   const appPrivateKey = makeECPrivateKey();
@@ -272,7 +315,6 @@ test('handlePendingSignIn with authResponseToken', async () => {
   const authResponse = await makeAuthResponse(
     privateKey,
     sampleProfiles.ryan,
-    'ryan.id',
     metadata,
     undefined,
     appPrivateKey,
@@ -286,12 +328,10 @@ test('handlePendingSignIn with authResponseToken', async () => {
 
   expect(fail).toBeCalledTimes(0);
   expect(pass).toBeCalledTimes(1);
-  expect(fetchMock.mock.calls.length).toEqual(1);
-  expect(fetchMock.mock.calls[0][0]).toEqual(url);
+  expect(fetchMock.mock.calls.length).toEqual(0);
 });
 
 test('handlePendingSignIn 2', async () => {
-  const url = `${nameLookupURL}ryan.id`;
   fetchMock.mockResponse(JSON.stringify(sampleNameRecords.ryan));
 
   const appPrivateKey = makeECPrivateKey();
@@ -302,7 +342,6 @@ test('handlePendingSignIn 2', async () => {
   const authResponse = await makeAuthResponse(
     privateKey,
     sampleProfiles.ryan,
-    'ryan.id',
     metadata,
     undefined,
     appPrivateKey,
@@ -319,8 +358,7 @@ test('handlePendingSignIn 2', async () => {
   await blockstack.handlePendingSignIn(authResponse).then(pass).catch(fail);
   expect(fail).toBeCalledTimes(0);
   expect(pass).toBeCalledTimes(1);
-  expect(fetchMock.mock.calls.length).toEqual(1);
-  expect(fetchMock.mock.calls[0][0]).toEqual(url);
+  expect(fetchMock.mock.calls.length).toEqual(0);
 });
 
 test('handlePendingSignIn with existing user session', async () => {
@@ -350,7 +388,6 @@ test('handlePendingSignIn with existing user session', async () => {
   const authResponse = await makeAuthResponse(
     privateKey,
     sampleProfiles.ryan,
-    'ryan.id',
     metadata,
     undefined,
     appPrivateKey,
@@ -416,7 +453,6 @@ test('handlePendingSignIn with authResponseToken, transit key and custom Blockst
   const authResponse = await makeAuthResponse(
     privateKey,
     sampleProfiles.ryan,
-    'ryan.id',
     metadata,
     undefined,
     appPrivateKey,
@@ -466,7 +502,6 @@ test(
     const authResponse = await makeAuthResponse(
       privateKey,
       sampleProfiles.ryan,
-      'ryan.id',
       metadata,
       undefined,
       appPrivateKey,
@@ -499,7 +534,7 @@ test('profileLookUp', async () => {
   const mockZonefile = {
     zonefile:
       '$ORIGIN ryan.id\n$TTL 3600\n_http._tcp IN URI 10 1 "https://blockstack.s3.amazonaws.com/ryan.id"\n',
-    address: '19MoWG8u88L6t766j7Vne21Mg4wHsCQ7vk',
+    address: 'SP3AMDH2ZZB8XQK467V9HV5CRQF2RPBZ4MDMSBHJZ',
   };
 
   fetchMock
@@ -522,6 +557,8 @@ test('profileLookUp', async () => {
   expect(fetchMock.mock.calls.length).toEqual(4);
   expect(fetchMock.mock.calls[0][0]).toEqual('http://potato:6270/v1/names/ryan.id');
   expect(fetchMock.mock.calls[1][0]).toEqual(sampleTokenFiles.ryan.url);
-  expect(fetchMock.mock.calls[2][0]).toEqual('https://core.blockstack.org/v1/names/ryan.id');
+  expect(fetchMock.mock.calls[2][0]).toEqual(
+    'https://stacks-node-api.mainnet.stacks.co/v1/names/ryan.id'
+  );
   expect(fetchMock.mock.calls[3][0]).toEqual(sampleTokenFiles.ryan.url);
 });

@@ -1,10 +1,9 @@
 import { StacksTransaction } from './transaction';
 
 import { StacksPrivateKey, StacksPublicKey } from './keys';
-import { isSingleSig } from './authorization';
+import { isSingleSig, nextVerification, SpendingConditionOpts } from './authorization';
 import { cloneDeep } from './utils';
-import { SpendingCondition } from './authorization';
-import { AuthType } from './constants';
+import { AuthType, PubKeyEncoding, StacksMessageType } from './constants';
 import { SigningError } from './errors';
 
 export class TransactionSigner {
@@ -20,9 +19,40 @@ export class TransactionSigner {
     this.originDone = false;
     this.checkOversign = true;
     this.checkOverlap = true;
+
+    // If multi-sig spending condition exists, iterate over
+    // auth fields and reconstruct sigHash
+    const spendingCondition = transaction.auth.spendingCondition;
+    if (spendingCondition && !isSingleSig(spendingCondition)) {
+      if (
+        spendingCondition.fields.filter(
+          field => field.contents.type === StacksMessageType.MessageSignature
+        ).length >= spendingCondition.signaturesRequired
+      ) {
+        throw new Error('SpendingCondition has more signatures than are expected');
+      }
+
+      spendingCondition.fields.forEach(field => {
+        if (field.contents.type === StacksMessageType.MessageSignature) {
+          const signature = field.contents;
+          const nextVerify = nextVerification(
+            this.sigHash,
+            transaction.auth.authType,
+            spendingCondition.fee,
+            spendingCondition.nonce,
+            PubKeyEncoding.Compressed, // always compressed for multisig
+            signature
+          );
+          this.sigHash = nextVerify.nextSigHash;
+        }
+      });
+    }
   }
 
-  static createSponsorSigner(transaction: StacksTransaction, spendingCondition: SpendingCondition) {
+  static createSponsorSigner(
+    transaction: StacksTransaction,
+    spendingCondition: SpendingConditionOpts
+  ) {
     if (transaction.auth.authType != AuthType.Sponsored) {
       throw new SigningError('Cannot add sponsor to non-sponsored transaction');
     }
@@ -54,7 +84,9 @@ export class TransactionSigner {
       const spendingCondition = this.transaction.auth.spendingCondition;
       if (
         this.checkOversign &&
-        spendingCondition.fields.length >= spendingCondition.signaturesRequired
+        spendingCondition.fields.filter(
+          field => field.contents.type === StacksMessageType.MessageSignature
+        ).length >= spendingCondition.signaturesRequired
       ) {
         throw new Error('Origin would have too many signatures');
       }
@@ -83,8 +115,8 @@ export class TransactionSigner {
     if (this.transaction.auth === undefined) {
       throw new SigningError('"transaction.auth" is undefined');
     }
-    if (this.transaction.auth.sponsorSpendingCondition === undefined) {
-      throw new SigningError('"transaction.auth.spendingCondition" is undefined');
+    if (this.transaction.auth.authType !== AuthType.Sponsored) {
+      throw new SigningError('"transaction.auth.authType" is not AuthType.Sponsored');
     }
 
     const nextSighash = this.transaction.signNextSponsor(this.sigHash, privateKey);

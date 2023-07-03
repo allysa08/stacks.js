@@ -18,7 +18,7 @@ This library supports the creation of the following Stacks transaction types:
 
 ## Key Generation
 
-```javascript
+```typescript
 import { createStacksPrivateKey, makeRandomPrivKey, getPublicKey } from '@stacks/transactions';
 
 // Random key
@@ -33,65 +33,67 @@ const privateKey = createStacksPrivateKey(key);
 
 ## STX Token Transfer Transaction
 
-```javascript
-import {
-  makeSTXTokenTransfer,
-  makeStandardSTXPostCondition,
-  broadcastTransaction,
-} from '@stacks/transactions';
-import { StacksTestnet, StacksMainnet } from '@stacks/network';
-const BigNum = require('bn.js');
-
-// for mainnet, use `StacksMainnet()`
-const network = new StacksTestnet();
+```typescript
+import { makeSTXTokenTransfer, broadcastTransaction, AnchorMode } from '@stacks/transactions';
 
 const txOptions = {
   recipient: 'SP3FGQ8Z7JY9BWYZ5WM53E0M9NK7WHJF0691NZ159',
-  amount: new BigNum(12345),
+  amount: 12345n,
   senderKey: 'b244296d5907de9864c0b0d51f98a13c52890be0404e83f273144cd5b9960eed01',
-  network,
+  network: 'testnet', // for mainnet, use 'mainnet'
   memo: 'test memo',
-  nonce: new BigNum(0), // set a nonce manually if you don't want builder to fetch from a Stacks node
-  fee: new BigNum(200), // set a tx fee if you don't want the builder to estimate
+  nonce: 0n, // set a nonce manually if you don't want builder to fetch from a Stacks node
+  fee: 200n, // set a tx fee if you don't want the builder to estimate
+  anchorMode: AnchorMode.Any,
 };
 
 const transaction = await makeSTXTokenTransfer(txOptions);
 
 // to see the raw serialized tx
-const serializedTx = transaction.serialize().toString('hex');
+const serializedTx = transaction.serialize(); // Uint8Array
+const serializedTxHex = bytesToHex(serializedTx); // hex string
 
 // broadcasting transaction to the specified network
-broadcastTransaction(transaction, network);
+const broadcastResponse = await broadcastTransaction(transaction);
+const txId = broadcastResponse.txid;
 ```
 
 ## Smart Contract Deploy Transaction
 
-```javascript
-import { makeContractDeploy, broadcastTransaction } from '@stacks/transactions';
+```typescript
+import { makeContractDeploy, broadcastTransaction, AnchorMode } from '@stacks/transactions';
 import { StacksTestnet, StacksMainnet } from '@stacks/network';
-const BigNum = require('bn.js');
+import { readFileSync } from 'fs';
 
 // for mainnet, use `StacksMainnet()`
 const network = new StacksTestnet();
 
 const txOptions = {
   contractName: 'contract_name',
-  codeBody: fs.readFileSync('/path/to/contract.clar').toString(),
+  codeBody: readFileSync('/path/to/contract.clar').toString(),
   senderKey: 'b244296d5907de9864c0b0d51f98a13c52890be0404e83f273144cd5b9960eed01',
   network,
+  anchorMode: AnchorMode.Any,
 };
 
 const transaction = await makeContractDeploy(txOptions);
 
-broadcastTransaction(transaction, network);
+const broadcastResponse = await broadcastTransaction(transaction, network);
+const txId = broadcastResponse.txid;
 ```
 
 ## Smart Contract Function Call
 
-```javascript
-import { makeContractCall, BufferCV, broadcastTransaction } from '@stacks/transactions';
+```typescript
+import {
+  makeContractCall,
+  broadcastTransaction,
+  AnchorMode,
+  FungibleConditionCode,
+  makeStandardSTXPostCondition,
+  bufferCVFromString,
+} from '@stacks/transactions';
 import { StacksTestnet, StacksMainnet } from '@stacks/network';
-const BigNum = require('bn.js');
 
 // for mainnet, use `StacksMainnet()`
 const network = new StacksTestnet();
@@ -100,7 +102,7 @@ const network = new StacksTestnet();
 // See below for details on constructing post conditions
 const postConditionAddress = 'SP2ZD731ANQZT6J4K3F5N8A40ZXWXC1XFXHVVQFKE';
 const postConditionCode = FungibleConditionCode.GreaterEqual;
-const postConditionAmount = new BigNum(1000000);
+const postConditionAmount = 1000000n;
 const postConditions = [
   makeStandardSTXPostCondition(postConditionAddress, postConditionCode, postConditionAmount),
 ];
@@ -114,71 +116,79 @@ const txOptions = {
   validateWithAbi: true,
   network,
   postConditions,
+  anchorMode: AnchorMode.Any,
 };
 
 const transaction = await makeContractCall(txOptions);
 
-broadcastTransaction(transaction, network);
+const broadcastResponse = await broadcastTransaction(transaction, network);
+const txId = broadcastResponse.txid;
 ```
 
 In this example we construct a `contract-call` transaction with a post condition. We have set the `validateWithAbi` option to `true`, so the `makeContractCall` builder will attempt to fetch this contracts ABI from the specified Stacks network, and validate that the provided functionArgs match what is described in the ABI. This should help you avoid constructing invalid contract-call transactions. If you would prefer to provide your own ABI instead of fetching it from the network, the `validateWithABI` option also accepts [ClarityABI](https://github.com/blockstack/stacks-transactions-js/blob/master/src/contract-abi.ts#L231) objects, which can be constructed from ABI files like so:
 
 ```typescript
+import { ClarityAbi } from '@stacks/transactions';
 import { readFileSync } from 'fs';
 
 const abi: ClarityAbi = JSON.parse(readFileSync('abi.json').toString());
+// For sample abi json see: stacks.js/packages/transactions/tests/abi/test-abi.json
 ```
 
 ## Sponsoring Transactions
 
 To generate a sponsored transaction, first create and sign the transaction as the origin. The `sponsored` property in the options object must be set to true.
 
-```javascript
-import { makeContractCall, BufferCV } from '@stacks/transactions';
-const BigNum = require('bn.js');
+```typescript
+import { bytesToHex } from '@stacks/common';
+import { makeContractCall, BufferCV, AnchorMode, bufferCVFromString } from '@stacks/transactions';
 
 const txOptions = {
   contractAddress: 'SPBMRFRPPGCDE3F384WCJPK8PQJGZ8K9QKK7F59X',
   contractName: 'contract_name',
   functionName: 'contract_function',
   functionArgs: [bufferCVFromString('foo')],
+  fee: 0,
   senderKey: 'b244296d5907de9864c0b0d51f98a13c52890be0404e83f273144cd5b9960eed01',
   validateWithAbi: true,
   sponsored: true,
+  anchorMode: AnchorMode.Any,
 };
 
 const transaction = await makeContractCall(txOptions);
-const serializedTx = transaction.serialize().toString('hex');
+const serializedTx = bytesToHex(transaction.serialize());
 ```
 
 The serialized transaction can now be passed to the sponsoring party which will sign the sponsor portion of the transaction and set the fee.
 
-```javascript
+```typescript
 import {
   sponsorTransaction,
-  BufferReader,
+  BytesReader,
   deserializeTransaction,
   broadcastTransaction,
 } from '@stacks/transactions';
 import { StacksTestnet, StacksMainnet } from '@stacks/network';
-const BigNum = require('bn.js');
 
-const bufferReader = new BufferReader(Buffer.from(serializedTx));
-const deserializedTx = deserializeTransaction(bufferReader);
+const bytesReader = new BytesReader(Buffer.from(serializedTx, 'hex'));
+const deserializedTx = deserializeTransaction(bytesReader);
 const sponsorKey = '770287b9471081c8acd37d57190c7a70f0da2633311cc120853537362d32e67c01';
-const fee = BigNum(1000);
+const fee = 1000n;
 
 const sponsorOptions = {
   transaction: deserializedTx,
   sponsorPrivateKey: sponsorKey,
   fee,
+  sponsorNonce: 0,
 };
 
 const sponsoredTx = await sponsorTransaction(sponsorOptions);
 
 // for mainnet, use `StacksMainnet()`
 const network = new StacksTestnet();
-broadcastTransaction(sponsoredTx, network);
+
+const broadcastResponse = await broadcastTransaction(sponsoredTx, network);
+const txId = broadcastResponse.txid;
 ```
 
 ## Supporting multi-signature transactions
@@ -190,18 +200,18 @@ The `numSignatures` and `publicKeys` properties in the options object must be se
 import {
   makeUnsignedSTXTokenTransfer,
   createStacksPrivateKey,
+  deserializeTransaction,
   pubKeyfromPrivKey,
   publicKeyToString,
   TransactionSigner,
   standardPrincipalCV,
-  BufferReader,
+  BytesReader,
+  AnchorMode,
 } from '@stacks/transactions';
-const BigNum = require('bn.js');
 
 const recipient = standardPrincipalCV('SP3FGQ8...');
-const amount = new BigNum(2500000);
-const fee = new BigNum(0);
-const nonce = new BigNum(0);
+const amount = 2500000n;
+const fee = 0n;
 const memo = 'test memo';
 
 // private keys of the participants in the transaction
@@ -220,10 +230,10 @@ const transaction = await makeUnsignedSTXTokenTransfer({
   recipient,
   amount,
   fee,
-  nonce,
   memo,
   numSignatures: 2, // number of signature required
   publicKeys: pubKeyStrings, // public key string array with >= numSignatures elements
+  anchorMode: AnchorMode.Any,
 });
 
 const serializedTx = transaction.serialize();
@@ -235,8 +245,9 @@ transaction must be appended to the signature.
 
 ```typescript
 // deserialize and sign transaction
-const bufferReader = new BufferReader(serializedTx);
-const deserializedTx = deserializeTransaction(bufferReader);
+const bytesReader = new BytesReader(serializedTx);
+// Partially signed or unsigned multi-sig tx can be deserialized to add the required signatures
+const deserializedTx = deserializeTransaction(bytesReader);
 
 const signer = new TransactionSigner(deserializedTx);
 
@@ -259,6 +270,9 @@ const serializedSignedTx = deserializedTx.serialize();
 Read-only contract functions can be called without generating or broadcasting a transaction. Instead it works via a direct API call to a Stacks node.
 
 ```typescript
+import { bufferCVFromString, callReadOnlyFunction } from '@stacks/transactions';
+import { StacksTestnet } from '@stacks/network';
+
 const contractAddress = 'ST3KC0MTNW34S1ZXD36JYKFD3JJMWA01M55DSJ4JE';
 const contractName = 'kv-store';
 const functionName = 'get-value';
@@ -303,7 +317,24 @@ Building transactions that call functions in deployed clarity contracts requires
 
 This library contains Typescript types and classes that map to the Clarity types, in order to make it easy to construct well-typed Clarity values in Javascript. These types all extend the abstract class `ClarityValue`.
 
-```javascript
+```typescript
+import {
+  trueCV,
+  falseCV,
+  noneCV,
+  someCV,
+  intCV,
+  uintCV,
+  standardPrincipalCV,
+  contractPrincipalCV,
+  responseErrorCV,
+  responseOkCV,
+  listCV,
+  tupleCV,
+  bufferCV,
+} from '@stacks/transactions';
+import { utf8ToBytes } from '@stacks/common';
+
 // construct boolean clarity values
 const t = trueCV();
 const f = falseCV();
@@ -312,9 +343,9 @@ const f = falseCV();
 const nothing = noneCV();
 const something = someCV(t);
 
-// construct a buffer clarity value from an existing Buffer
-const buffer = Buffer.from('foo');
-const bufCV = bufferCV(buffer);
+// construct a buffer clarity value from an existing byte array
+const bytes = utf8ToBytes('foo'); // Uint8Array(3) [ 102, 111, 111 ]
+const bufCV = bufferCV(bytes);
 
 // construct signed and unsigned integer clarity values
 const i = intCV(-10);
@@ -359,11 +390,17 @@ For details see: https://github.com/blockstack/stacks-blockchain/blob/master/sip
 
 ### STX post condition
 
-```javascript
+```typescript
+import {
+  FungibleConditionCode,
+  makeStandardSTXPostCondition,
+  makeContractSTXPostCondition,
+} from '@stacks/transactions';
+
 // With a standard principal
 const postConditionAddress = 'SP2ZD731ANQZT6J4K3F5N8A40ZXWXC1XFXHVVQFKE';
 const postConditionCode = FungibleConditionCode.GreaterEqual;
-const postConditionAmount = new BigNum(12345);
+const postConditionAmount = 12345n;
 
 const standardSTXPostCondition = makeStandardSTXPostCondition(
   postConditionAddress,
@@ -385,14 +422,21 @@ const contractSTXPostCondition = makeContractSTXPostCondition(
 
 ### Fungible token post condition
 
-```javascript
+```typescript
+import {
+  FungibleConditionCode,
+  createAssetInfo,
+  makeStandardFungiblePostCondition,
+} from '@stacks/transactions';
+
 // With a standard principal
 const postConditionAddress = 'SP2ZD731ANQZT6J4K3F5N8A40ZXWXC1XFXHVVQFKE';
 const postConditionCode = FungibleConditionCode.GreaterEqual;
-const postConditionAmount = new BigNum(12345);
+const postConditionAmount = 12345n;
 const assetAddress = 'SP62M8MEFH32WGSB7XSF9WJZD7TQB48VQB5ANWSJ';
 const assetContractName = 'test-asset-contract';
-const fungibleAssetInfo = createAssetInfo(assetAddress, assetContractName);
+const assetName = 'test-token';
+const fungibleAssetInfo = createAssetInfo(assetAddress, assetContractName, assetName);
 
 const standardFungiblePostCondition = makeStandardFungiblePostCondition(
   postConditionAddress,
@@ -406,7 +450,8 @@ const contractAddress = 'SPBMRFRPPGCDE3F384WCJPK8PQJGZ8K9QKK7F59X';
 const contractName = 'test-contract';
 const assetAddress = 'SP62M8MEFH32WGSB7XSF9WJZD7TQB48VQB5ANWSJ';
 const assetContractName = 'test-asset-contract';
-const fungibleAssetInfo = createAssetInfo(assetAddress, assetContractName);
+const assetName = 'test-token';
+const fungibleAssetInfo = createAssetInfo(assetAddress, assetContractName, assetName);
 
 const contractFungiblePostCondition = makeContractFungiblePostCondition(
   contractAddress,
@@ -419,14 +464,28 @@ const contractFungiblePostCondition = makeContractFungiblePostCondition(
 
 ### Non-fungible token post condition
 
-```javascript
+> **Warning**
+> The Stacks blockchain's post-condition processor can NOT check ownership.
+> It checks whether or not a principal **will send** or **will not send** an NFT.
+> Post-conditions can NOT verify anything about the recipient of an asset.
+> If you want to verify conditions about asset recipients, you will need to use [Clarity](https://docs.stacks.co/docs/write-smart-contracts/).
+
+```typescript
+import {
+  NonFungibleConditionCode,
+  createAssetInfo,
+  makeStandardNonFungiblePostCondition,
+  makeContractNonFungiblePostCondition,
+  bufferCVFromString,
+} from '@stacks/transactions';
+
 // With a standard principal
 const postConditionAddress = 'SP2ZD731ANQZT6J4K3F5N8A40ZXWXC1XFXHVVQFKE';
-const postConditionCode = NonFungibleConditionCode.Owns;
+const postConditionCode = NonFungibleConditionCode.DoesNotSend;
 const assetAddress = 'SP62M8MEFH32WGSB7XSF9WJZD7TQB48VQB5ANWSJ';
 const assetContractName = 'test-asset-contract';
 const assetName = 'test-asset';
-const tokenAssetName = 'test-token-asset';
+const tokenAssetName = bufferCVFromString('test-token-asset');
 const nonFungibleAssetInfo = createAssetInfo(assetAddress, assetContractName, assetName);
 
 const standardNonFungiblePostCondition = makeStandardNonFungiblePostCondition(
@@ -455,6 +514,8 @@ const contractNonFungiblePostCondition = makeContractNonFungiblePostCondition(
 
 Clarity Values represent values of Clarity contracts. If a JSON format is required the helper function `cvToJSON` can be used.
 
-```
-cvToJSON(hexToCV(tx.tx_result.hex))
+```typescript
+import { cvToJSON, hexToCV } from '@stacks/transactions';
+
+cvToJSON(hexToCV(tx.tx_result.hex));
 ```

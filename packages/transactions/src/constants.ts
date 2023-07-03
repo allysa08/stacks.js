@@ -9,13 +9,15 @@ enum ChainID {
 const DEFAULT_CHAIN_ID = ChainID.Mainnet;
 const MAX_STRING_LENGTH_BYTES = 128;
 const CLARITY_INT_SIZE = 128;
-const COINBASE_BUFFER_LENGTH_BYTES = 32;
+const CLARITY_INT_BYTE_SIZE = 16;
+const COINBASE_LENGTH_BYTES = 32;
 const RECOVERABLE_ECDSA_SIG_LENGTH_BYTES = 65;
 const COMPRESSED_PUBKEY_LENGTH_BYTES = 32;
 const UNCOMPRESSED_PUBKEY_LENGTH_BYTES = 64;
 const MEMO_MAX_LENGTH_BYTES = 34;
 const DEFAULT_CORE_NODE_API_URL = 'https://stacks-node-api.mainnet.stacks.co';
 
+// todo: add explicit enum values
 enum StacksMessageType {
   Address,
   Principal,
@@ -27,21 +29,68 @@ enum StacksMessageType {
   LengthPrefixedList,
   Payload,
   MessageSignature,
+  StructuredDataSignature,
   TransactionAuthField,
+}
+
+type WhenMessageTypeMap<T> = Record<StacksMessageType, T>;
+
+export function whenMessageType(messageType: StacksMessageType) {
+  return <T>(messageTypeMap: WhenMessageTypeMap<T>): T => messageTypeMap[messageType];
 }
 
 enum PayloadType {
   TokenTransfer = 0x00,
   SmartContract = 0x01,
+  VersionedSmartContract = 0x06,
   ContractCall = 0x02,
   PoisonMicroblock = 0x03,
   Coinbase = 0x04,
+  CoinbaseToAltRecipient = 0x05,
 }
 
+enum ClarityVersion {
+  Clarity1 = 1,
+  Clarity2 = 2,
+}
+
+/**
+ * How a transaction should get appended to the Stacks blockchain.
+ *
+ * In the Stacks blockchain, there are two kinds of blocks: anchored
+ * blocks and streaming microblocks. A transactions AnchorMode specifies
+ * which kind of block it should be included in.
+ *
+ * For more information about the kinds of Stacks blocks and the various
+ * AnchorModes, check out {@link https://github.com/stacksgov/sips/blob/main/sips/sip-001/sip-001-burn-election.md SIP 001} and
+ * {@link https://github.com/stacksgov/sips/blob/main/sips/sip-005/sip-005-blocks-and-transactions.md SIP 005}
+ */
 enum AnchorMode {
+  /** The transaction MUST be included in an anchored block */
   OnChainOnly = 0x01,
+  /** The transaction MUST be included in a microblock */
   OffChainOnly = 0x02,
+  /** The leader can choose where to include the transaction (anchored block or microblock)*/
   Any = 0x03,
+}
+
+const AnchorModeNames = ['onChainOnly', 'offChainOnly', 'any'] as const;
+type AnchorModeName = (typeof AnchorModeNames)[number];
+
+const AnchorModeMap = {
+  [AnchorModeNames[0]]: AnchorMode.OnChainOnly,
+  [AnchorModeNames[1]]: AnchorMode.OffChainOnly,
+  [AnchorModeNames[2]]: AnchorMode.Any,
+  [AnchorMode.OnChainOnly]: AnchorMode.OnChainOnly,
+  [AnchorMode.OffChainOnly]: AnchorMode.OffChainOnly,
+  [AnchorMode.Any]: AnchorMode.Any,
+};
+
+function anchorModeFromNameOrValue(mode: AnchorModeName | AnchorMode): AnchorMode {
+  if (mode in AnchorModeMap) {
+    return AnchorModeMap[mode];
+  }
+  throw new Error(`Invalid anchor mode "${mode}", must be one of: ${AnchorModeNames.join(', ')}`);
 }
 
 enum TransactionVersion {
@@ -104,8 +153,8 @@ enum FungibleConditionCode {
 }
 
 enum NonFungibleConditionCode {
-  DoesNotOwn = 0x10,
-  Owns = 0x11,
+  Sends = 0x10,
+  DoesNotSend = 0x11,
 }
 
 enum PostConditionPrincipalID {
@@ -144,7 +193,8 @@ enum TxRejectedReason {
 export {
   MAX_STRING_LENGTH_BYTES,
   CLARITY_INT_SIZE,
-  COINBASE_BUFFER_LENGTH_BYTES,
+  CLARITY_INT_BYTE_SIZE,
+  COINBASE_LENGTH_BYTES as COINBASE_BYTES_LENGTH,
   DEFAULT_CHAIN_ID,
   DEFAULT_TRANSACTION_VERSION,
   RECOVERABLE_ECDSA_SIG_LENGTH_BYTES,
@@ -155,7 +205,11 @@ export {
   ChainID,
   StacksMessageType,
   PayloadType,
+  ClarityVersion,
   AnchorMode,
+  AnchorModeName,
+  AnchorModeNames,
+  anchorModeFromNameOrValue,
   TransactionVersion,
   PostConditionMode,
   PostConditionType,

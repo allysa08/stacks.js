@@ -1,12 +1,16 @@
 export { AppConfig } from './appConfig';
-export { makeAuthRequest, makeAuthResponse, decryptPrivateKey } from './messages';
+export {
+  makeAuthRequest,
+  makeAuthRequestToken,
+  makeAuthResponse,
+  decryptPrivateKey,
+} from './messages';
 export { getAuthRequestFromURL, fetchAppManifest } from './provider';
 export {
   verifyAuthRequest,
   verifyAuthResponse,
   isExpirationDateValid,
   isIssuanceDateValid,
-  doPublicKeysMatchUsername,
   doPublicKeysMatchIssuer,
   doSignaturesMatchPublicKeys,
   isManifestUriValid,

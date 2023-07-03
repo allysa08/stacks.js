@@ -8,12 +8,11 @@ import {
   decryptContent,
   encryptContent,
   EncryptContentOptions,
-  hexStringToECPair,
+  isValidPrivateKey,
 } from '@stacks/encryption';
 import { getAddressFromDID } from './dids';
 import {
   BLOCKSTACK_DEFAULT_GAIA_HUB_URL,
-  fetchPrivate,
   getGlobalObject,
   InvalidStateError,
   isLaterVersion,
@@ -23,10 +22,10 @@ import {
   nextHour,
 } from '@stacks/common';
 import { extractProfile } from '@stacks/profile';
-import { AuthScope, DEFAULT_PROFILE, NAME_LOOKUP_PATH } from './constants';
-import * as queryString from 'query-string';
+import { AuthScope, DEFAULT_PROFILE } from './constants';
+
 import { UserData } from './userData';
-import { StacksMainnet } from '@stacks/network';
+import { createFetchFn, FetchFn, StacksMainnet } from '@stacks/network';
 import { protocolEchoReplyDetection } from './protocolEchoDetection';
 
 /**
@@ -107,9 +106,9 @@ export class UserSession {
    * pass options that aren't part of the Blockstack authentication specification,
    * but might be supported by special authenticators.
    *
-   * @returns {String} the authentication request
+   * @returns {String} the authentication request token
    */
-  makeAuthRequest(
+  makeAuthRequestToken(
     transitKey?: string,
     redirectURI?: string,
     manifestURI?: string,
@@ -127,7 +126,7 @@ export class UserSession {
     manifestURI = manifestURI || appConfig.manifestURI();
     scopes = scopes || appConfig.scopes;
     appDomain = appDomain || appConfig.appDomain;
-    return authMessages.makeAuthRequest(
+    return authMessages.makeAuthRequestToken(
       transitKey,
       redirectURI,
       manifestURI,
@@ -163,11 +162,9 @@ export class UserSession {
       throwIfUnavailable: true,
       usageDesc: 'getAuthResponseToken',
     })?.search;
-    if (search) {
-      const queryDict = queryString.parse(search);
-      return queryDict.authResponse ? (queryDict.authResponse as string) : '';
-    }
-    return '';
+
+    const params = new URLSearchParams(search);
+    return params.get('authResponse') ?? '';
   }
 
   /**
@@ -212,7 +209,8 @@ export class UserSession {
    * if handling the sign in request fails or there was no pending sign in request.
    */
   async handlePendingSignIn(
-    authResponseToken: string = this.getAuthResponseToken()
+    authResponseToken: string = this.getAuthResponseToken(),
+    fetchFn: FetchFn = createFetchFn()
   ): Promise<UserData> {
     const sessionData = this.store.getSessionData();
 
@@ -235,22 +233,7 @@ export class UserSession {
       throw new Error('Unexpected token payload type of string');
     }
 
-    // Section below is removed since the config was never persisted and therefore useless
-
-    // if (isLaterVersion(tokenPayload.version as string, '1.3.0')
-    //    && tokenPayload.blockstackAPIUrl !== null && tokenPayload.blockstackAPIUrl !== undefined) {
-    //   // override globally
-    //   Logger.info(`Overriding ${config.network.blockstackAPIUrl} `
-    //     + `with ${tokenPayload.blockstackAPIUrl}`)
-    //   // TODO: this config is never saved so the user node preference
-    //   // is not respected in later sessions..
-    //   config.network.blockstackAPIUrl = tokenPayload.blockstackAPIUrl as string
-    //   coreNode = tokenPayload.blockstackAPIUrl as string
-    // }
-
-    const nameLookupURL = `${coreNode}${NAME_LOOKUP_PATH}`;
-
-    const isValid = await verifyAuthResponse(authResponseToken, nameLookupURL);
+    const isValid = await verifyAuthResponse(authResponseToken);
     if (!isValid) {
       throw new LoginFailedError('Invalid authentication response.');
     }
@@ -262,16 +245,13 @@ export class UserSession {
       if (transitKey !== undefined && transitKey != null) {
         if (tokenPayload.private_key !== undefined && tokenPayload.private_key !== null) {
           try {
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
             appPrivateKey = (await authMessages.decryptPrivateKey(
               transitKey,
               tokenPayload.private_key as string
             )) as string;
           } catch (e) {
             Logger.warn('Failed decryption of appPrivateKey, will try to use as given');
-            try {
-              hexStringToECPair(tokenPayload.private_key as string);
-            } catch (ecPairError) {
+            if (!isValidPrivateKey(tokenPayload.private_key as string)) {
               throw new LoginFailedError(
                 'Failed decrypting appPrivateKey. Usually means' +
                   ' that the transit key has changed during login.'
@@ -281,7 +261,6 @@ export class UserSession {
         }
         if (coreSessionToken !== undefined && coreSessionToken !== null) {
           try {
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
             coreSessionToken = (await authMessages.decryptPrivateKey(
               transitKey,
               coreSessionToken
@@ -314,7 +293,6 @@ export class UserSession {
     }
 
     const userData: UserData = {
-      username: tokenPayload.username as string,
       profile: tokenPayload.profile,
       email: tokenPayload.email as string,
       decentralizedID: tokenPayload.iss,
@@ -323,14 +301,14 @@ export class UserSession {
       coreSessionToken,
       authResponseToken,
       hubUrl,
+      appPrivateKeyFromWalletSalt: tokenPayload.appPrivateKeyFromWalletSalt as string,
       coreNode: tokenPayload.blockstackAPIUrl as string,
-      // eslint-disable-next-line @typescript-eslint/ban-ts-ignore
-      // @ts-ignore
+      // @ts-expect-error
       gaiaAssociationToken,
     };
     const profileURL = tokenPayload.profile_url as string;
     if (!userData.profile && profileURL) {
-      const response = await fetchPrivate(profileURL);
+      const response = await fetchFn(profileURL);
       if (!response.ok) {
         // return blank profile if we fail to fetch
         userData.profile = Object.assign({}, DEFAULT_PROFILE);
@@ -364,14 +342,14 @@ export class UserSession {
 
   /**
    * Encrypts the data provided with the app public key.
-   * @param {String|Buffer} content  the data to encrypt
+   * @param {string | Uint8Array} content  the data to encrypt
    * @param options
-   * @param {String} options.publicKey the hex string of the ECDSA public
+   * @param {string} options.publicKey the hex string of the ECDSA public
    * key to use for encryption. If not provided, will use user's appPrivateKey.
    *
-   * @returns {String} Stringified ciphertext object
+   * @returns {string} Stringified ciphertext object
    */
-  encryptContent(content: string | Buffer, options?: EncryptContentOptions): Promise<string> {
+  encryptContent(content: string | Uint8Array, options?: EncryptContentOptions): Promise<string> {
     const opts = Object.assign({}, options);
     if (!opts.privateKey) {
       opts.privateKey = this.loadUserData().appPrivateKey;
@@ -382,13 +360,13 @@ export class UserSession {
   /**
    * Decrypts data encrypted with `encryptContent` with the
    * transit private key.
-   * @param {String|Buffer} content - encrypted content.
+   * @param {string | Uint8Array} content - encrypted content.
    * @param options
-   * @param {String} options.privateKey - The hex string of the ECDSA private
+   * @param {string} options.privateKey - The hex string of the ECDSA private
    * key to use for decryption. If not provided, will use user's appPrivateKey.
-   * @returns {String|Buffer} decrypted content.
+   * @returns {string | Uint8Array} decrypted content.
    */
-  decryptContent(content: string, options?: { privateKey?: string }): Promise<Buffer | string> {
+  decryptContent(content: string, options?: { privateKey?: string }): Promise<Uint8Array | string> {
     const opts = Object.assign({}, options);
     if (!opts.privateKey) {
       opts.privateKey = this.loadUserData().appPrivateKey;
@@ -423,3 +401,14 @@ export class UserSession {
     }
   }
 }
+
+// Add method aliases for backwards compatibility
+export interface UserSession {
+  /** @deprecated {@link makeAuthRequest} was renamed to {@link makeAuthRequestToken} */
+  makeAuthRequest(
+    ...args: Parameters<typeof UserSession.prototype.makeAuthRequestToken>
+  ): ReturnType<typeof UserSession.prototype.makeAuthRequestToken>;
+}
+
+// eslint-disable-next-line @typescript-eslint/unbound-method
+UserSession.prototype.makeAuthRequest = UserSession.prototype.makeAuthRequestToken;

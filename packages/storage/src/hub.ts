@@ -1,26 +1,29 @@
-import { ECPair, script, Transaction } from 'bitcoinjs-lib';
-import { TokenSigner } from 'jsontokens';
-import {
-  ecPairToAddress,
-  getPublicKeyFromPrivate,
-  hashSha256Sync,
-  hexStringToECPair,
-  randomBytes,
-} from '@stacks/encryption';
-
 import {
   BadPathError,
+  bytesToHex,
   ConflictError,
   DoesNotExist,
-  fetchPrivate,
   GaiaHubErrorResponse,
   Logger,
   megabytesToBytes,
   NotEnoughProofError,
   PayloadTooLargeError,
   PreconditionFailedError,
+  utf8ToBytes,
   ValidationError,
 } from '@stacks/common';
+import {
+  compressPrivateKey,
+  ecSign,
+  getPublicKeyFromPrivate,
+  hashSha256Sync,
+  publicKeyToBtcAddress,
+  randomBytes,
+  Signature,
+} from '@stacks/encryption';
+import { createFetchFn, FetchFn } from '@stacks/network';
+import { fromByteArray } from 'base64-js';
+import { TokenSigner } from 'jsontokens';
 
 /**
  * @ignore
@@ -56,12 +59,13 @@ interface UploadResponse {
  */
 export async function uploadToGaiaHub(
   filename: string,
-  contents: Blob | Buffer | ArrayBufferView | string,
+  contents: Blob | Uint8Array | ArrayBufferView | string,
   hubConfig: GaiaHubConfig,
   contentType = 'application/octet-stream',
   newFile = true,
   etag?: string,
-  dangerouslyIgnoreEtag?: boolean
+  dangerouslyIgnoreEtag?: boolean,
+  fetchFn: FetchFn = createFetchFn()
 ): Promise<UploadResponse> {
   Logger.debug(`uploadToGaiaHub: uploading ${filename} to ${hubConfig.server}`);
 
@@ -78,14 +82,11 @@ export async function uploadToGaiaHub(
     }
   }
 
-  const response = await fetchPrivate(
-    `${hubConfig.server}/store/${hubConfig.address}/${filename}`,
-    {
-      method: 'POST',
-      headers,
-      body: contents,
-    }
-  );
+  const response = await fetchFn(`${hubConfig.server}/store/${hubConfig.address}/${filename}`, {
+    method: 'POST',
+    headers,
+    body: contents,
+  });
   if (!response.ok) {
     throw await getBlockstackErrorFromResponse(
       response,
@@ -101,17 +102,18 @@ export async function uploadToGaiaHub(
  * @param filename
  * @param hubConfig
  */
-export async function deleteFromGaiaHub(filename: string, hubConfig: GaiaHubConfig): Promise<void> {
+export async function deleteFromGaiaHub(
+  filename: string,
+  hubConfig: GaiaHubConfig,
+  fetchFn: FetchFn = createFetchFn()
+): Promise<void> {
   Logger.debug(`deleteFromGaiaHub: deleting ${filename} from ${hubConfig.server}`);
-  const response = await fetchPrivate(
-    `${hubConfig.server}/delete/${hubConfig.address}/${filename}`,
-    {
-      method: 'DELETE',
-      headers: {
-        Authorization: `bearer ${hubConfig.token}`,
-      },
-    }
-  );
+  const response = await fetchFn(`${hubConfig.server}/delete/${hubConfig.address}/${filename}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `bearer ${hubConfig.token}`,
+    },
+  });
   if (!response.ok) {
     throw await getBlockstackErrorFromResponse(
       response,
@@ -148,24 +150,16 @@ function makeLegacyAuthToken(challengeText: string, signerKeyHex: string): strin
     throw new Error('Failed in parsing legacy challenge text from the gaia hub.');
   }
   if (parsedChallenge[0] === 'gaiahub' && parsedChallenge[3] === 'blockstack_storage_please_sign') {
-    const signer = hexStringToECPair(signerKeyHex + (signerKeyHex.length === 64 ? '01' : ''));
-    const digest = hashSha256Sync(Buffer.from(challengeText));
-
-    const signatureBuffer = signer.sign(digest);
-    const signatureWithHash = script.signature.encode(signatureBuffer, Transaction.SIGHASH_NONE);
-
-    // We only want the DER encoding so remove the sighash version byte at the end.
-    // See: https://github.com/bitcoinjs/bitcoinjs-lib/issues/1241#issuecomment-428062912
-    const signature = signatureWithHash.toString('hex').slice(0, -2);
+    const digest = hashSha256Sync(utf8ToBytes(challengeText));
+    const signatureBytes = ecSign(digest, compressPrivateKey(signerKeyHex));
+    // We only want the DER encoding so use toDERHex provided by @noble/secp256k1
+    const signature = Signature.fromCompact(bytesToHex(signatureBytes)).toDERHex();
 
     const publickey = getPublicKeyFromPrivate(signerKeyHex);
-    const token = Buffer.from(JSON.stringify({ publickey, signature })).toString('base64');
+    const token = fromByteArray(utf8ToBytes(JSON.stringify({ publickey, signature })));
     return token;
-  } else {
-    throw new Error(
-      'Failed to connect to legacy gaia hub. If you operate this hub, please update.'
-    );
   }
+  throw new Error('Failed to connect to legacy gaia hub. If you operate this hub, please update.');
 }
 
 /**
@@ -192,7 +186,7 @@ function makeV1GaiaAuthToken(
     return makeLegacyAuthToken(challengeText, signerKeyHex);
   }
 
-  const salt = randomBytes(16).toString('hex');
+  const salt = bytesToHex(randomBytes(16));
   const payload = {
     gaiaChallenge: challengeText,
     hubUrl,
@@ -212,17 +206,16 @@ function makeV1GaiaAuthToken(
 export async function connectToGaiaHub(
   gaiaHubUrl: string,
   challengeSignerHex: string,
-  associationToken?: string
+  associationToken?: string,
+  fetchFn: FetchFn = createFetchFn()
 ): Promise<GaiaHubConfig> {
   Logger.debug(`connectToGaiaHub: ${gaiaHubUrl}/hub_info`);
 
-  const response = await fetchPrivate(`${gaiaHubUrl}/hub_info`);
+  const response = await fetchFn(`${gaiaHubUrl}/hub_info`);
   const hubInfo = await response.json();
   const readURL = hubInfo.read_url_prefix;
   const token = makeV1GaiaAuthToken(hubInfo, challengeSignerHex, gaiaHubUrl, associationToken);
-  const address = ecPairToAddress(
-    hexStringToECPair(challengeSignerHex + (challengeSignerHex.length === 64 ? '01' : ''))
-  );
+  const address = publicKeyToBtcAddress(getPublicKeyFromPrivate(challengeSignerHex));
   return {
     url_prefix: readURL,
     max_file_upload_size_megabytes: hubInfo.max_file_upload_size_megabytes,
@@ -239,13 +232,16 @@ export async function connectToGaiaHub(
  *
  * @ignore
  */
-export async function getBucketUrl(gaiaHubUrl: string, appPrivateKey: string): Promise<string> {
-  const challengeSigner = ECPair.fromPrivateKey(Buffer.from(appPrivateKey, 'hex'));
-  const response = await fetchPrivate(`${gaiaHubUrl}/hub_info`);
+export async function getBucketUrl(
+  gaiaHubUrl: string,
+  appPrivateKey: string,
+  fetchFn: FetchFn = createFetchFn()
+): Promise<string> {
+  const response = await fetchFn(`${gaiaHubUrl}/hub_info`);
   const responseText = await response.text();
   const responseJSON = JSON.parse(responseText);
   const readURL = responseJSON.read_url_prefix;
-  const address = ecPairToAddress(challengeSigner);
+  const address = publicKeyToBtcAddress(getPublicKeyFromPrivate(appPrivateKey));
   const bucketUrl = `${readURL}${address}/`;
   return bucketUrl;
 }

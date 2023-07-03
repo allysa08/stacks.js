@@ -1,15 +1,15 @@
 import * as logger from 'winston';
 import * as bitcoinjs from 'bitcoinjs-lib';
-import * as URL from 'url';
 import * as readline from 'readline';
 import * as stream from 'stream';
 import * as fs from 'fs';
 import * as blockstack from 'blockstack';
-import { TokenSigner } from 'jsontokens';
 import {
   getTypeString,
   ClarityAbiType,
   isClarityAbiPrimitive,
+  isClarityAbiStringAscii,
+  isClarityAbiStringUtf8,
   isClarityAbiBuffer,
   isClarityAbiResponse,
   isClarityAbiOptional,
@@ -19,6 +19,9 @@ import {
   intCV,
   uintCV,
   bufferCVFromString,
+  stringAsciiCV,
+  stringUtf8CV,
+  someCV,
   trueCV,
   falseCV,
   standardPrincipalCV,
@@ -27,6 +30,7 @@ import {
 
 import { StacksNetwork } from '@stacks/network';
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const ZoneFile = require('zone-file');
 
 import {
@@ -37,7 +41,7 @@ import {
   ID_ADDRESS_PATTERN,
 } from './argparse';
 
-import { TransactionSigner } from 'blockstack';
+import { CLITransactionSigner, isCLITransactionSigner } from './common';
 
 import { decryptBackupPhrase } from './encrypt';
 
@@ -50,28 +54,6 @@ export interface UTXO {
   confirmations?: number;
   tx_hash: string;
   tx_output_n: number;
-}
-
-class CLITransactionSigner implements TransactionSigner {
-  address: string;
-  isComplete: boolean;
-
-  constructor(address = '') {
-    this.address = address;
-    this.isComplete = false;
-  }
-
-  getAddress(): Promise<string> {
-    return Promise.resolve().then(() => this.address);
-  }
-
-  signTransaction(_txIn: bitcoinjs.TransactionBuilder, _signingIndex: number): Promise<void> {
-    return Promise.resolve().then(() => {});
-  }
-
-  signerVersion(): number {
-    return 0;
-  }
 }
 
 export class NullSigner extends CLITransactionSigner {}
@@ -207,23 +189,9 @@ export class SegwitP2SHKeySigner extends CLITransactionSigner {
   }
 }
 
-export class SafetyError extends Error {
-  safetyErrors: AnyJson;
-  constructor(safetyErrors: AnyJson) {
-    super(JSONStringify(safetyErrors, true));
-    this.safetyErrors = safetyErrors;
-  }
-}
-
-function isCLITransactionSigner(
-  signer: string | CLITransactionSigner
-): signer is CLITransactionSigner {
-  return (signer as CLITransactionSigner).signerVersion !== undefined;
-}
-
 export function hasKeys(signer: string | CLITransactionSigner): boolean {
   if (isCLITransactionSigner(signer)) {
-    const s = signer as CLITransactionSigner;
+    const s = signer;
     return s.isComplete;
   } else {
     return true;
@@ -382,9 +350,8 @@ type AnyJson = string | number | boolean | null | { [property: string]: AnyJson 
 export function JSONStringify(obj: AnyJson, stderr: boolean = false): string {
   if ((!stderr && process.stdout.isTTY) || (stderr && process.stderr.isTTY)) {
     return JSON.stringify(obj, null, 2);
-  } else {
-    return JSON.stringify(obj);
   }
+  return JSON.stringify(obj);
 }
 
 /*
@@ -394,31 +361,6 @@ export function JSONStringify(obj: AnyJson, stderr: boolean = false): string {
 export function getPublicKeyFromPrivateKey(privateKey: string): string {
   const ecKeyPair = blockstack.hexStringToECPair(privateKey);
   return ecKeyPair.publicKey.toString('hex');
-}
-
-/*
- * Get a private key's address.  Honor the 01 to compress the public key
- * @privateKey (string) the hex-encoded private key
- */
-export function getPrivateKeyAddress(
-  network: CLINetworkAdapter,
-  privateKey: string | CLITransactionSigner
-): string {
-  if (isCLITransactionSigner(privateKey)) {
-    const pkts = privateKey as CLITransactionSigner;
-    return pkts.address;
-  } else {
-    const pk = privateKey as string;
-    const ecKeyPair = blockstack.hexStringToECPair(pk);
-    return network.coerceAddress(blockstack.ecPairToAddress(ecKeyPair));
-  }
-}
-
-/*
- * Is a name a sponsored name (a subdomain)?
- */
-export function isSubdomain(name: string): boolean {
-  return !!name.match(/^[^\.]+\.[^.]+\.[^.]+$/);
 }
 
 /*
@@ -433,14 +375,6 @@ export function canonicalPrivateKey(privkey: string): string {
 }
 
 /*
- * Get the sum of a set of UTXOs' values
- * @txIn (object) the transaction
- */
-export function sumUTXOs(utxos: UTXO[]): number {
-  return utxos.reduce((agg, x) => agg + x.value!, 0);
-}
-
-/*
  * Hash160 function for zone files
  */
 export function hash160(buff: Buffer): Buffer {
@@ -448,102 +382,14 @@ export function hash160(buff: Buffer): Buffer {
 }
 
 /*
- * Normalize a URL--remove duplicate /'s from the root of the path.
- * Throw an exception if it's not well-formed.
- */
-export function checkUrl(url: string): string {
-  const urlinfo = URL.parse(url);
-  if (!urlinfo.protocol) {
-    throw new Error(`Malformed full URL: missing scheme in ${url}`);
-  }
-
-  if (!urlinfo.path || urlinfo.path.startsWith('//')) {
-    throw new Error(`Malformed full URL: path root has multiple /'s: ${url}`);
-  }
-
-  return url;
-}
-
-/*
  * Sign a profile into a JWT
  */
+// eslint-disable-next-line @typescript-eslint/ban-types
 export function makeProfileJWT(profileData: Object, privateKey: string): string {
   const signedToken = blockstack.signProfileToken(profileData, privateKey);
   const wrappedToken = blockstack.wrapProfileToken(signedToken);
   const tokenRecords = [wrappedToken];
-  return JSONStringify((tokenRecords as unknown) as AnyJson);
-}
-
-export async function makeDIDConfiguration(
-  network: CLINetworkAdapter,
-  blockstackID: string,
-  domain: string,
-  privateKey: string
-): Promise<{ entries: { did: string; jwt: string }[] }> {
-  const tokenSigner = new TokenSigner('ES256K', privateKey);
-  const nameInfo = await network.getNameInfo(blockstackID);
-  const did = nameInfo.did!;
-  const payload = {
-    iss: did,
-    domain,
-    exp: new Date(new Date().setFullYear(new Date().getFullYear() + 1)),
-  };
-
-  const jwt = tokenSigner.sign(payload);
-  return {
-    entries: [
-      {
-        did,
-        jwt,
-      },
-    ],
-  };
-}
-/*
- * Broadcast a transaction and a zone file.
- * Returns an object that encodes the success/failure of doing so.
- * If zonefile is None, then only the transaction will be sent.
- */
-export async function broadcastTransactionAndZoneFile(
-  network: CLINetworkAdapter,
-  tx: string,
-  zonefile?: string
-) {
-  let txid: string;
-  return Promise.resolve()
-    .then(() => {
-      return network.broadcastTransaction(tx);
-    })
-    .then((_txid: string) => {
-      txid = _txid;
-      if (zonefile) {
-        return network.broadcastZoneFile(zonefile, txid);
-      } else {
-        return { status: true };
-      }
-    })
-    .then(resp => {
-      if (!resp.status) {
-        return {
-          status: false,
-          error: 'Failed to broadcast zone file',
-          txid: txid,
-        };
-      } else {
-        return {
-          status: true,
-          txid: txid,
-        };
-      }
-    })
-    .catch(e => {
-      return {
-        status: false,
-        error: 'Caught exception sending transaction or zone file',
-        message: e.message,
-        stacktrace: e.stack,
-      };
-    });
+  return JSONStringify(tokenRecords as unknown as AnyJson);
 }
 
 /*
@@ -666,6 +512,9 @@ export async function getBackupPhrase(
       if (!process.stdin.isTTY && !password) {
         // password must be given
         reject(new Error('Password argument required in non-interactive mode'));
+      } else if (process.env.password) {
+        // Do not prompt password for unit tests
+        resolve(process.env.password);
       } else {
         // prompt password
         getpass('Enter password: ', p => {
@@ -694,7 +543,7 @@ export function mkdirs(path: string): void {
       if ((statInfo.mode & fs.constants.S_IFDIR) === 0) {
         throw new Error(`Not a directory: ${tmpPath}`);
       }
-    } catch (e) {
+    } catch (e: any) {
       if (e.code === 'ENOENT') {
         // need to create
         fs.mkdirSync(tmpPath);
@@ -833,10 +682,26 @@ export function argToPrompt(arg: ClarityFunctionArg): InquirerPrompt {
       name,
       message: `Enter value for function argument "${name}" of type ${typeString}`,
     };
+  } else if (isClarityAbiStringAscii(type)) {
+    return {
+      type: 'input',
+      name,
+      message: `Enter value for function argument "${name}" of type ${typeString}`,
+    };
+  } else if (isClarityAbiStringUtf8(type)) {
+    return {
+      type: 'input',
+      name,
+      message: `Enter value for function argument "${name}" of type ${typeString}`,
+    };
   } else if (isClarityAbiResponse(type)) {
     throw new Error(`Contract function contains unsupported Clarity ABI type: ${typeString}`);
   } else if (isClarityAbiOptional(type)) {
-    throw new Error(`Contract function contains unsupported Clarity ABI type: ${typeString}`);
+    return {
+      type: 'input',
+      name,
+      message: `Enter value for function argument "${name}" of type ${typeString}`,
+    };
   } else if (isClarityAbiTuple(type)) {
     throw new Error(`Contract function contains unsupported Clarity ABI type: ${typeString}`);
   } else if (isClarityAbiList(type)) {
@@ -877,10 +742,16 @@ export function answerToClarityValue(answer: any, arg: ClarityFunctionArg): Clar
     }
   } else if (isClarityAbiBuffer(type)) {
     return bufferCVFromString(answer);
+  } else if (isClarityAbiStringAscii(type)) {
+    return stringAsciiCV(answer);
+  } else if (isClarityAbiStringUtf8(type)) {
+    return stringUtf8CV(answer);
   } else if (isClarityAbiResponse(type)) {
     throw new Error(`Contract function contains unsupported Clarity ABI type: ${typeString}`);
   } else if (isClarityAbiOptional(type)) {
-    throw new Error(`Contract function contains unsupported Clarity ABI type: ${typeString}`);
+    return someCV(
+      answerToClarityValue(answer, { name: arg.name, type: type.optional } as ClarityFunctionArg)
+    );
   } else if (isClarityAbiTuple(type)) {
     throw new Error(`Contract function contains unsupported Clarity ABI type: ${typeString}`);
   } else if (isClarityAbiList(type)) {
@@ -892,8 +763,65 @@ export function answerToClarityValue(answer: any, arg: ClarityFunctionArg): Clar
 
 export function generateExplorerTxPageUrl(txid: string, network: StacksNetwork): string {
   if (network.version === TransactionVersion.Testnet) {
-    return `https://explorer.stacks.co/txid/0x${txid}?chain=testnet`;
+    return `https://explorer.hiro.so/txid/0x${txid}?chain=testnet`;
   } else {
-    return `https://explorer.stacks.co/txid/0x${txid}?chain=mainnet`;
+    return `https://explorer.hiro.so/txid/0x${txid}?chain=mainnet`;
   }
+}
+
+export function isTestnetAddress(address: string) {
+  const addressInfo = bitcoinjs.address.fromBase58Check(address);
+  return addressInfo.version === bitcoinjs.networks.testnet.pubKeyHash;
+}
+
+/**
+ * Reference: https://github.com/stacks-network/subdomain-registrar/blob/da2d144f4355bb1d67f67d1ae5f329b476d647d6/src/operations.js#L18
+ */
+export type SubdomainOp = {
+  owner: string;
+  sequenceNumber: number;
+  zonefile: string;
+  subdomainName: string;
+  signature?: string;
+};
+
+/**
+ * Reference: https://github.com/stacks-network/subdomain-registrar/blob/da2d144f4355bb1d67f67d1ae5f329b476d647d6/src/operations.js#L55
+ */
+function destructZonefile(zonefile: string) {
+  const encodedZonefile = Buffer.from(zonefile).toString('base64');
+  // we pack into 250 byte strings -- the entry "zf99=" eliminates 5 useful bytes,
+  // and the max is 255.
+  const pieces = 1 + Math.floor(encodedZonefile.length / 250);
+  const destructed = [];
+  for (let i = 0; i < pieces; i++) {
+    const startIndex = i * 250;
+    const currentPiece = encodedZonefile.slice(startIndex, startIndex + 250);
+    if (currentPiece.length > 0) {
+      destructed.push(currentPiece);
+    }
+  }
+  return destructed;
+}
+
+/**
+ * Reference: https://github.com/stacks-network/subdomain-registrar/blob/da2d144f4355bb1d67f67d1ae5f329b476d647d6/src/operations.js#L71
+ */
+export function subdomainOpToZFPieces(operation: SubdomainOp) {
+  const destructedZonefile = destructZonefile(operation.zonefile);
+  const txt = [
+    `owner=${operation.owner}`,
+    `seqn=${operation.sequenceNumber}`,
+    `parts=${destructedZonefile.length}`,
+  ];
+  destructedZonefile.forEach((zfPart, ix) => txt.push(`zf${ix}=${zfPart}`));
+
+  if (operation.signature) {
+    txt.push(`sig=${operation.signature}`);
+  }
+
+  return {
+    name: operation.subdomainName,
+    txt,
+  };
 }

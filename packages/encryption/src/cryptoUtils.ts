@@ -1,3 +1,4 @@
+// @ts-ignore
 export function isSubtleCryptoAvailable(): boolean {
   return typeof crypto !== 'undefined' && typeof crypto.subtle !== 'undefined';
 }
@@ -13,7 +14,7 @@ export function isNodeCryptoAvailable<T>(
     if (!resolvedResult) {
       return false;
     }
-    // eslint-disable-next-line import/no-nodejs-modules,no-restricted-modules,global-require
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const cryptoModule = require('crypto') as typeof import('crypto');
     if (!cryptoModule) {
       return false;
@@ -32,8 +33,8 @@ export const NO_CRYPTO_LIB =
   'Crypto lib not found. Either the WebCrypto "crypto.subtle" or Node.js "crypto" module must be available.';
 
 export type TriplesecDecryptSignature = (
-  arg: { data: Buffer; key: Buffer },
-  cb: (err: Error | null, buff: Buffer | null) => void
+  arg: { data: Uint8Array; key: Uint8Array },
+  cb: (err: Error | null, buff: Uint8Array | null) => void
 ) => void;
 
 export interface WebCryptoLib {
@@ -56,8 +57,7 @@ export async function getCryptoLib(): Promise<WebCryptoLib | NodeCryptoLib> {
     };
   } else {
     try {
-      // eslint-disable-next-line max-len
-      // eslint-disable-next-line import/no-nodejs-modules,no-restricted-modules,global-require,@typescript-eslint/no-var-requires
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const nodeCrypto = require('crypto') as typeof import('crypto');
       return {
         lib: nodeCrypto,

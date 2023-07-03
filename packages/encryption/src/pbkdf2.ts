@@ -1,3 +1,4 @@
+import { utf8ToBytes, writeUInt32BE } from '@stacks/common';
 import { getCryptoLib } from './cryptoUtils';
 
 export type Pbkdf2Digests = 'sha512' | 'sha256';
@@ -5,11 +6,11 @@ export type Pbkdf2Digests = 'sha512' | 'sha256';
 export interface Pbkdf2 {
   derive(
     password: string,
-    salt: Buffer,
+    salt: Uint8Array,
     iterations: number,
     keyLength: number,
     digest: Pbkdf2Digests
-  ): Promise<Buffer>;
+  ): Promise<Uint8Array>;
 }
 
 type NodePbkdf2Fn = typeof import('crypto').pbkdf2;
@@ -23,11 +24,11 @@ export class NodeCryptoPbkdf2 implements Pbkdf2 {
 
   async derive(
     password: string,
-    salt: Buffer,
+    salt: Uint8Array,
     iterations: number,
     keyLength: number,
     digest: Pbkdf2Digests
-  ): Promise<Buffer> {
+  ): Promise<Uint8Array> {
     if (digest !== 'sha512' && digest !== 'sha256') {
       throw new Error(`Unsupported digest "${digest}" for Pbkdf2`);
     }
@@ -51,11 +52,11 @@ export class WebCryptoPbkdf2 implements Pbkdf2 {
 
   async derive(
     password: string,
-    salt: Buffer,
+    salt: Uint8Array,
     iterations: number,
     keyLength: number,
     digest: Pbkdf2Digests
-  ): Promise<Buffer> {
+  ): Promise<Uint8Array> {
     let algo: string;
     if (digest === 'sha256') {
       algo = 'SHA-256';
@@ -64,13 +65,13 @@ export class WebCryptoPbkdf2 implements Pbkdf2 {
     } else {
       throw new Error(`Unsupported Pbkdf2 digest algorithm "${digest}"`);
     }
-    let result: ArrayBuffer;
-    const passwordBytes = Buffer.from(password, 'utf8');
+
+    const passwordBytes = utf8ToBytes(password);
     try {
       const key = await this.subtleCrypto.importKey('raw', passwordBytes, 'PBKDF2', false, [
         'deriveBits',
       ]);
-      result = await this.subtleCrypto.deriveBits(
+      const result = await this.subtleCrypto.deriveBits(
         {
           name: 'PBKDF2',
           salt,
@@ -80,12 +81,12 @@ export class WebCryptoPbkdf2 implements Pbkdf2 {
         key,
         keyLength * 8
       );
+      return new Uint8Array(result);
     } catch (error) {
       // Browser appears to support WebCrypto but missing pbkdf2 support.
       const partialWebCrypto = new WebCryptoPartialPbkdf2(this.subtleCrypto);
       return partialWebCrypto.derive(password, salt, iterations, keyLength, digest);
     }
-    return Buffer.from(result);
   }
 }
 
@@ -103,15 +104,15 @@ export class WebCryptoPartialPbkdf2 implements Pbkdf2 {
 
   async derive(
     password: string,
-    salt: Buffer,
+    salt: Uint8Array,
     iterations: number,
     keyLength: number,
     digest: Pbkdf2Digests
-  ): Promise<Buffer> {
+  ): Promise<Uint8Array> {
     if (digest !== 'sha512' && digest !== 'sha256') {
       throw new Error(`Unsupported digest "${digest}" for Pbkdf2`);
     }
-    const key = Buffer.from(password, 'utf8');
+    const passwordBytes = utf8ToBytes(password);
     const algo = digest === 'sha512' ? 'SHA-512' : 'SHA-256';
     const algoOpts = { name: 'HMAC', hash: algo };
     const hmacDigest = (key: ArrayBuffer, data: ArrayBuffer) =>
@@ -128,24 +129,12 @@ export class WebCryptoPartialPbkdf2 implements Pbkdf2 {
     const hLen = digest === 'sha512' ? 64 : 32;
     const l = Math.ceil(keyLength / hLen);
 
-    function writeUInt32BE(data: Uint8Array, value: number, offset: number) {
-      value = +value;
-      offset >>>= 0;
-      data[offset] = value >>> 24;
-      data[offset + 1] = value >>> 16;
-      data[offset + 2] = value >>> 8;
-      data[offset + 3] = value & 0xff;
-      return offset + 4;
-    }
-
     for (let i = 1; i <= l; i++) {
       writeUInt32BE(block1, i, saltLength);
-      // eslint-disable-next-line no-await-in-loop
-      const T = await hmacDigest(key, block1);
+      const T = await hmacDigest(passwordBytes, block1);
       let U = T;
       for (let j = 1; j < iterations; j++) {
-        // eslint-disable-next-line no-await-in-loop
-        U = await hmacDigest(key, U);
+        U = await hmacDigest(passwordBytes, U);
         for (let k = 0; k < hLen; k++) {
           T[k] ^= U[k];
         }
@@ -153,7 +142,7 @@ export class WebCryptoPartialPbkdf2 implements Pbkdf2 {
       DK.set(T.subarray(0, DK.byteLength - destPos), destPos);
       destPos += hLen;
     }
-    return Buffer.from(DK.buffer);
+    return DK;
   }
 }
 
@@ -161,7 +150,6 @@ export async function createPbkdf2(): Promise<Pbkdf2> {
   const cryptoLib = await getCryptoLib();
   if (cryptoLib.name === 'subtleCrypto') {
     return new WebCryptoPbkdf2(cryptoLib.lib);
-  } else {
-    return new NodeCryptoPbkdf2(cryptoLib.lib.pbkdf2);
   }
+  return new NodeCryptoPbkdf2(cryptoLib.lib.pbkdf2);
 }

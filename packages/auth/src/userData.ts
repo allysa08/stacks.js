@@ -2,8 +2,6 @@
  *  Returned from the [[UserSession.loadUserData]] function.
  */
 export interface UserData {
-  // public: the blockstack ID (for example: stackerson.id or alice.blockstack.id)
-  username: string;
   // public: the email address for the user. only available if the `email`
   // scope is requested, and if the user has entered a valid email into
   // their profile.
@@ -36,4 +34,6 @@ export interface UserData {
   profile: any;
   // private: does not get sent to webapp at all.
   gaiaHubConfig?: any;
+  // Based on issue with incorrect appPrivateKey derivation see stacks-web-wallet issue #2238
+  appPrivateKeyFromWalletSalt?: string;
 }

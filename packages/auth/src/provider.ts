@@ -1,6 +1,6 @@
-import * as queryString from 'query-string';
 import { decodeToken } from 'jsontokens';
-import { BLOCKSTACK_HANDLER, getGlobalObject, fetchPrivate } from '@stacks/common';
+import { BLOCKSTACK_HANDLER, getGlobalObject } from '@stacks/common';
+import { createFetchFn, FetchFn } from '@stacks/network';
 
 /**
  * Retrieves the authentication request from the query string
@@ -9,21 +9,14 @@ import { BLOCKSTACK_HANDLER, getGlobalObject, fetchPrivate } from '@stacks/commo
  * @private
  * @ignore
  */
-export function getAuthRequestFromURL() {
+export function getAuthRequestFromURL(): string | null {
   const location = getGlobalObject('location', {
     throwIfUnavailable: true,
     usageDesc: 'getAuthRequestFromURL',
   });
-  if (location?.search) {
-    const queryDict = queryString.parse(location?.search);
-    if (queryDict.authRequest) {
-      return (queryDict.authRequest as string).split(`${BLOCKSTACK_HANDLER}:`).join('');
-    } else {
-      return null;
-    }
-  } else {
-    return null;
-  }
+
+  const params = new URLSearchParams(location?.search);
+  return params.get('authRequest')?.replaceAll(`${BLOCKSTACK_HANDLER}:`, '') ?? null;
 }
 
 /**
@@ -36,7 +29,10 @@ export function getAuthRequestFromURL() {
  * @private
  * @ignore
  */
-export async function fetchAppManifest(authRequest: string): Promise<any> {
+export async function fetchAppManifest(
+  authRequest: string,
+  fetchFn: FetchFn = createFetchFn()
+): Promise<any> {
   if (!authRequest) {
     throw new Error('Invalid auth request');
   }
@@ -47,7 +43,7 @@ export async function fetchAppManifest(authRequest: string): Promise<any> {
   const manifestURI = payload.manifest_uri as string;
   try {
     // Logger.debug(`Fetching manifest from ${manifestURI}`)
-    const response = await fetchPrivate(manifestURI);
+    const response = await fetchFn(manifestURI);
     const responseText = await response.text();
     const responseJSON = JSON.parse(responseText);
     return { ...responseJSON, manifestURI };

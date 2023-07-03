@@ -1,5 +1,8 @@
 import Ajv from 'ajv';
 import * as process from 'process';
+import * as path from 'path';
+import * as os from 'os';
+
 import * as fs from 'fs';
 
 export const NAME_PATTERN = '^([0-9a-z_.+-]{3,37})$';
@@ -78,36 +81,31 @@ const LOG_CONFIG_DEFAULTS: CLI_LOG_CONFIG_TYPE = {
 };
 
 const CONFIG_DEFAULTS: CLI_CONFIG_TYPE = {
-  blockstackAPIUrl: 'http://stacks-node-api.stacks.co',
-  blockstackNodeUrl: 'http://stacks-node-api.stacks.co',
-  broadcastServiceUrl: 'http://stacks-node-api.stacks.co/v2/transactions',
+  blockstackAPIUrl: 'https://stacks-node-api.stacks.co',
+  blockstackNodeUrl: 'https://stacks-node-api.stacks.co',
+  broadcastServiceUrl: 'https://stacks-node-api.stacks.co/v2/transactions',
   utxoServiceUrl: 'https://blockchain.info',
   logConfig: LOG_CONFIG_DEFAULTS,
 };
 
-const CONFIG_REGTEST_DEFAULTS: CLI_CONFIG_TYPE = {
-  blockstackAPIUrl: 'http://localhost:16268',
-  blockstackNodeUrl: 'http://localhost:16264',
-  broadcastServiceUrl: 'http://localhost:16269',
-  utxoServiceUrl: 'http://localhost:18332',
-  logConfig: LOG_CONFIG_DEFAULTS,
-  bitcoindPassword: 'blockstacksystem',
-  bitcoindUsername: 'blockstack',
+const CONFIG_LOCALNET_DEFAULTS = {
+  blockstackAPIUrl: `http://localhost:20443`,
+  blockstackNodeUrl: `http://localhost:20443`,
+  broadcastServiceUrl: `http://localhost:20443/v2/transactions`,
+  utxoServiceUrl: `http://localhost:18332`,
+  logConfig: Object.assign({}, LOG_CONFIG_DEFAULTS, { level: 'debug' }),
 };
 
-const PUBLIC_TESTNET_HOST = 'testnet-master.blockstack.org';
-
 const CONFIG_TESTNET_DEFAULTS = {
-  blockstackAPIUrl: `http://${PUBLIC_TESTNET_HOST}:20443`,
-  blockstackNodeUrl: `http://${PUBLIC_TESTNET_HOST}:20443`,
-  broadcastServiceUrl: `http://${PUBLIC_TESTNET_HOST}:20443/v2/transactions`,
-  utxoServiceUrl: `http://${PUBLIC_TESTNET_HOST}:18332`,
+  blockstackAPIUrl: `https://stacks-node-api.testnet.stacks.co`,
+  blockstackNodeUrl: `https://stacks-node-api.testnet.stacks.co`,
+  broadcastServiceUrl: `https://stacks-node-api.testnet.stacks.co/v2/transactions`,
+  utxoServiceUrl: `https://blockchain.info`, // todo: this likely doesn't work anymore
   logConfig: Object.assign({}, LOG_CONFIG_DEFAULTS, { level: 'debug' }),
 };
 
 export const DEFAULT_CONFIG_PATH = '~/.blockstack-cli.conf';
-export const DEFAULT_CONFIG_REGTEST_PATH = '~/.blockstack-cli-regtest.conf';
-export const DEFAULT_CONFIG_TESTNET_PATH = '~/.blockstack-cli-testnet.conf';
+export const DEFAULT_CONFIG_TESTNET_PATH = path.join(os.homedir(), '.blockstack-cli-testnet.conf');
 
 export const DEFAULT_MAX_ID_SEARCH_INDEX = 256;
 
@@ -347,7 +345,7 @@ export const CLI_ARGS = {
         '      contract_function 1 0 "$PAYMENT"\n' +
         '     {\n' +
         "       txid: '0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'," +
-        "       transaction: 'https://explorer.stacks.co/txid/0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'" +
+        "       transaction: 'https://explorer.hiro.so/txid/0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'" +
         '     }\n' +
         '\n',
       group: 'Account Management',
@@ -392,7 +390,7 @@ export const CLI_ARGS = {
         '     contract_function SPBMRFRPPGCDE3F384WCJPK8PQJGZ8K9QKK7F59X\n' +
         '     {\n' +
         "       txid: '0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'," +
-        "       transaction: 'https://explorer.stacks.co/txid/0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'" +
+        "       transaction: 'https://explorer.hiro.so/txid/0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'" +
         '     }\n' +
         '\n',
       group: 'Account Management',
@@ -416,13 +414,39 @@ export const CLI_ARGS = {
         '\n' +
         '    $ stx convert_address 12qdRgXxgNBNPnDeEChy3fYTbSHQ8nfZfD\n' +
         '    {\n' +
-        '      "STACKS": "SPA2MZWV9N67TBYVWTE0PSSKMJ2F6YXW7CBE6YPW",\n' +
-        '      "BTC": "12qdRgXxgNBNPnDeEChy3fYTbSHQ8nfZfD"\n' +
+        '      "mainnet": {\n' +
+        '        "STACKS": "SPA2MZWV9N67TBYVWTE0PSSKMJ2F6YXW7CBE6YPW",\n' +
+        '        "BTC": "12qdRgXxgNBNPnDeEChy3fYTbSHQ8nfZfD"\n' +
+        '      }\n' +
         '    }\n' +
         '    $ stx convert_address SPA2MZWV9N67TBYVWTE0PSSKMJ2F6YXW7CBE6YPW\n' +
         '    {\n' +
-        '      "STACKS": "SPA2MZWV9N67TBYVWTE0PSSKMJ2F6YXW7CBE6YPW",\n' +
-        '      "BTC": "12qdRgXxgNBNPnDeEChy3fYTbSHQ8nfZfD"\n' +
+        '      "mainnet": {\n' +
+        '        "STACKS": "SPA2MZWV9N67TBYVWTE0PSSKMJ2F6YXW7CBE6YPW",\n' +
+        '        "BTC": "12qdRgXxgNBNPnDeEChy3fYTbSHQ8nfZfD"\n' +
+        '      }\n' +
+        '    }\n' +
+        '    $ stx convert_address SPA2MZWV9N67TBYVWTE0PSSKMJ2F6YXW7CBE6YPW -t\n' +
+        '    {\n' +
+        '      "mainnet": {\n' +
+        '        "STACKS": "SPA2MZWV9N67TBYVWTE0PSSKMJ2F6YXW7CBE6YPW",\n' +
+        '        "BTC": "12qdRgXxgNBNPnDeEChy3fYTbSHQ8nfZfD"\n' +
+        '      },\n' +
+        '      "testnet": {\n' +
+        '        "STACKS": "STA2MZWV9N67TBYVWTE0PSSKMJ2F6YXW7DX96QAM",\n' +
+        '        "BTC": "mhMaijcwVPcdAthFwmgLsaknTRt72GqQYo"\n' +
+        '      }\n' +
+        '    }\n' +
+        '    $ stx convert_address STA2MZWV9N67TBYVWTE0PSSKMJ2F6YXW7DX96QAM\n' +
+        '    {\n' +
+        '      "mainnet": {\n' +
+        '        "STACKS": "SPA2MZWV9N67TBYVWTE0PSSKMJ2F6YXW7CBE6YPW",\n' +
+        '        "BTC": "12qdRgXxgNBNPnDeEChy3fYTbSHQ8nfZfD"\n' +
+        '      },\n' +
+        '      "testnet": {\n' +
+        '        "STACKS": "STA2MZWV9N67TBYVWTE0PSSKMJ2F6YXW7DX96QAM",\n' +
+        '        "BTC": "mhMaijcwVPcdAthFwmgLsaknTRt72GqQYo"\n' +
+        '      }\n' +
         '    }\n',
       group: 'Account Management',
     },
@@ -502,7 +526,7 @@ export const CLI_ARGS = {
         '    $ stx deploy_contract ./my_contract.clar my_contract 1 0 "$PAYMENT"\n' +
         '     {\n' +
         "       txid: '0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'," +
-        "       transaction: 'https://explorer.stacks.co/txid/0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'" +
+        "       transaction: 'https://explorer.hiro.so/txid/0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'" +
         '     }\n' +
         '\n',
       group: 'Account Management',
@@ -1203,10 +1227,10 @@ export const CLI_ARGS = {
           realtype: '12_words_or_ciphertext',
         },
         {
-          name: 'name_or_id_address',
+          name: 'index',
           type: 'string',
-          realtype: 'name-or-id-address',
-          pattern: `${NAME_PATTERN}|${SUBDOMAIN_PATTERN}|${ID_ADDRESS_PATTERN}`,
+          realtype: 'integer',
+          pattern: '^[0-9]+$',
         },
         {
           name: 'app_origin',
@@ -1218,33 +1242,19 @@ export const CLI_ARGS = {
       minItems: 3,
       maxItems: 3,
       help:
-        'Get the application private key from a 12-word backup phrase and a name or ID-address.  ' +
+        'Get the application private key from a 12- or 24-word Secret Key and an index of the enumerated associated accounts.  ' +
         'This is the private key used to sign data in Gaia, and its address is the Gaia bucket ' +
         'address.  If you provide your encrypted backup phrase, you will be asked to decrypt it.  ' +
-        'If you provide a name instead of an ID-address, its ID-address will be queried automatically ' +
-        '(note that this means that the name must already be registered).\n' +
-        '\n' +
-        'NOTE: This command does NOT verify whether or not the name or ID-address was created by the ' +
-        'backup phrase. You should do this yourself via the `get_owner_keys` command if you are not sure.\n' +
-        '\n' +
-        'There are two derivation paths emitted by this command:  a `keyInfo` path and a `legacyKeyInfo`' +
-        "path.  You should use the one that matches the Gaia hub read URL's address, if you have already " +
-        'signed in before.  If not, then you should use the `keyInfo` path when possible.\n' +
         '\n' +
         'Example:\n' +
         '\n' +
         '    $ export BACKUP_PHRASE="one race buffalo dynamic icon drip width lake extra forest fee kit"\n' +
-        '    $ stx get_app_keys "$BACKUP_PHRASE" example.id.blockstack https://my.cool.dapp\n' +
+        '    $ stx get_app_keys "$BACKUP_PHRASE" 1 https://my.cool.dapp\n' +
         '    {\n' +
         '      "keyInfo": {\n' +
         '        "privateKey": "TODO",\n' +
         '        "address": "TODO"\n' +
         '      },\n' +
-        '      "legacyKeyInfo": {\n' +
-        '        "privateKey": "90f9ec4e13fb9a00243b4c1510075157229bda73076c7c721208c2edca28ea8b",\n' +
-        '        "address": "1Lr8ggSgdmfcb4764woYutUfFqQMjEoKHc"\n' +
-        '      },\n' +
-        '      "ownerKeyIndex": 0\n' +
         '    }',
       group: 'Key Management',
     },
@@ -1339,9 +1349,14 @@ export const CLI_ARGS = {
           type: 'string',
           realtype: '24_words_or_ciphertext',
         },
+        {
+          name: 'derivation_path',
+          type: 'string',
+          realtype: 'custom_derivation_path_string',
+        },
       ],
       minItems: 1,
-      maxItems: 1,
+      maxItems: 2,
       help:
         'Get the payment private key from a 24-word backup phrase used by the Stacks wallet.  If you provide an ' +
         'encrypted backup phrase, you will be asked for your password to decrypt it.  This command ' +
@@ -1349,7 +1364,7 @@ export const CLI_ARGS = {
         '\n' +
         'Example\n' +
         '\n' +
-        '    $ stx get_stacks_payment_key "toast canal educate tissue express melody produce later gospel victory meadow outdoor hollow catch liberty annual gasp hat hello april equip thank neck cruise"\n' +
+        '    $ stx get_stacks_wallet_key "toast canal educate tissue express melody produce later gospel victory meadow outdoor hollow catch liberty annual gasp hat hello april equip thank neck cruise"\n' +
         '    [\n' +
         '      {\n' +
         '        "privateKey": "a25cea8d310ce656c6d427068c77bad58327334f73e39c296508b06589bc4fa201",\n' +
@@ -1362,6 +1377,50 @@ export const CLI_ARGS = {
         '    ]\n' +
         '\n',
       group: 'Key Management',
+    },
+    migrate_subdomains: {
+      type: 'array',
+      items: [
+        {
+          name: 'backup_phrase',
+          type: 'string',
+          realtype: '24_words_or_ciphertext',
+        },
+        {
+          name: 'registrar_url',
+          type: 'string',
+          realtype: 'url',
+        },
+      ],
+      minItems: 1,
+      maxItems: 2,
+      help:
+        'Enable users to transfer subdomains currently owned by any data-key \n' +
+        'addresses, to the wallet-key address of the account. Data-key addresses \n' +
+        'owning addresses is a remnant of the Blockstack Connect interface. \n' +
+        'Currently, the web wallet extension shows usernames owned by the \n' +
+        'wallet-key address of an account.\n' +
+        '\n' +
+        'This command performs these steps in sequence: \n' +
+        '1. Detects whether there are any subdomains owned by data-key addresses\n' +
+        '2. Prompts the user to confirm whether they want to migrate the each \n' +
+        '   owned subdomain to the corresponding wallet-key addresses for the \n' +
+        '   resepective wallet account\n' +
+        "3. Alerts the user to any subdomains that can't be migrated to these \n" +
+        '   wallet-key addresses given collision with existing usernames owned \n' +
+        '   by them\n' +
+        '4. Initiates a request to the subdomain registrar using the /transfer\n' +
+        '   endpoint\n' +
+        '5. Displays a message indicating how long the user will have to wait \n' +
+        '   until request is likely fulfilled\n' +
+        '6. Informs user that no subdomains are pending migration if the command \n' +
+        '   is executed again\n' +
+        '\n' +
+        'Example\n' +
+        '\n' +
+        '    $ stx migrate_subdomains "toast canal educate tissue express melody produce later gospel victory meadow outdoor hollow catch liberty annual gasp hat hello april equip thank neck cruise" https://registrar.stacks.co\n' +
+        '\n',
+      group: 'Blockstack ID Management',
     },
     get_zonefile: {
       type: 'array',
@@ -1451,9 +1510,14 @@ export const CLI_ARGS = {
           type: 'string',
           realtype: '12_words_or_ciphertext',
         },
+        {
+          name: 'derivation_path',
+          type: 'string',
+          realtype: 'custom_derivation_path_string',
+        },
       ],
       minItems: 0,
-      maxItems: 1,
+      maxItems: 2,
       help:
         'Generate the owner and payment private keys, optionally from a given 12-word ' +
         'backup phrase.  If no backup phrase is given, a new one will be generated.  If you provide ' +
@@ -1465,9 +1529,10 @@ export const CLI_ARGS = {
         '    {\n' +
         '      "mnemonic": "apart spin rich leader siren foil dish sausage fee pipe ethics bundle",\n' +
         '      "keyInfo": {\n' +
-        '        "privateKey": "56d30f2b605ed114c7dc45599ae521c525d07e1286fbab67452a6586ea49332a01"\n' +
-        '        "address": "SP3G19B6J50FH6JGXAKS06N6WA1XPJCKKM4JCHC2D"\n' +
-        '        "btcAddress": "1Nixy2aB3miBreDTGTjieyh2hGng55k1rw"\n' +
+        '        "privateKey": "25899fab1b9b95cc2d1692529f00fb788e85664df3d14db1a660f33c5f96d8ab01"\n' +
+        '        "address": "SP3RBZ4TZ3EK22SZRKGFZYBCKD7WQ5B8FFS0AYVF7"\n' +
+        '        "btcAddress": "1Nwxfx7VoYAg2mEN35dTRw4H7gte8ajFki"\n' +
+        '        "wif": "KxUgLbeVeFZEUUQpc3ncYn5KFB3WH5MVRv3SJ2g5yPwkrXs3QRaP"\n' +
         '        "index": 0,\n' +
         '      }\n' +
         '    }\n' +
@@ -1947,9 +2012,9 @@ export const CLI_ARGS = {
         '      "blockHeight": 567890,\n' +
         '      "confirmations": 7,\n' +
         '    }\n' +
-        '    $ stx -H https://core.blockstack.org zonefile_push "$ZONEFILE_PATH"\n' +
+        '    $ stx -H https://stacks-node-api.stacks.co zonefile_push "$ZONEFILE_PATH"\n' +
         '    [\n' +
-        '      "https://core.blockstack.org"\n' +
+        '      "https://stacks-node-api.stacks.co"\n' +
         '    ]\n' +
         '\n',
       group: 'Blockstack ID Management',
@@ -1958,9 +2023,9 @@ export const CLI_ARGS = {
       type: 'array',
       items: [
         {
-          name: 'blockstack_id',
+          name: 'fully-qualified-name',
           type: 'string',
-          realtype: 'on-chain-blockstack_id',
+          realtype: 'on-chain-fully-qualified-name',
           pattern: NAME_PATTERN,
         },
         {
@@ -1970,15 +2035,9 @@ export const CLI_ARGS = {
           pattern: PRIVATE_KEY_PATTERN,
         },
         {
-          name: 'payment_key',
+          name: 'salt',
           type: 'string',
-          realtype: 'private_key',
-          pattern: `${PRIVATE_KEY_PATTERN_ANY}`,
-        },
-        {
-          name: 'gaia_hub',
-          type: 'string',
-          realtype: 'url',
+          realtype: 'text',
         },
         {
           name: 'zonefile',
@@ -1987,7 +2046,7 @@ export const CLI_ARGS = {
         },
       ],
       minItems: 4,
-      maxItems: 5,
+      maxItems: 4,
       help:
         'If you are trying to register a name for a *private key*, use this command.\n' +
         '\n' +
@@ -2016,9 +2075,7 @@ export const CLI_ARGS = {
         'Example:\n' +
         '\n' +
         '    $ export OWNER="136ff26efa5db6f06b28f9c8c7a0216a1a52598045162abfe435d13036154a1b01"\n' +
-        '    $ export PAYMENT="bfeffdf57f29b0cc1fab9ea197bb1413da2561fe4b83e962c7f02fbbe2b1cd5401"\n' +
-        '    $ stx register example.id "$OWNER" "$PAYMENT" https://hub.blockstack.org\n' +
-        '    9bb908bfd4ab221f0829167a461229172184fc825a012c4e551533aa283207b1\n' +
+        '    $ stx register example.id "$OWNER" salt zonfile' +
         '\n',
       group: 'Blockstack ID Management',
     },
@@ -2092,58 +2149,59 @@ export const CLI_ARGS = {
         '    $ stx register_addr example.id "$ID_ADDRESS" "$PAYMENT" https://gaia.blockstack.org/hub',
       group: 'Blockstack ID Management',
     },
-    register_subdomain: {
-      type: 'array',
-      items: [
-        {
-          name: 'blockstack_id',
-          type: 'string',
-          realtype: 'blockstack_id',
-          pattern: SUBDOMAIN_PATTERN,
-        },
-        {
-          name: 'owner_key',
-          type: 'string',
-          realtype: 'private_key',
-          pattern: PRIVATE_KEY_PATTERN,
-        },
-        {
-          name: 'gaia_hub',
-          type: 'string',
-          realtype: 'url',
-        },
-        {
-          name: 'registrar',
-          type: 'string',
-          realtype: 'url',
-        },
-        {
-          name: 'zonefile',
-          type: 'string',
-          realtype: 'path',
-        },
-      ],
-      minItems: 4,
-      maxItems: 5,
-      help:
-        'Register a subdomain.  This will generate and sign a subdomain zone file record ' +
-        'with the given `GAIA_HUB` URL and send it to the given subdomain registrar (`REGISTRAR`).\n' +
-        '\n' +
-        'This command generates, signs, and uploads a profile to the `GAIA_HUB` url.  Note that the `GAIA_HUB` ' +
-        'argument must correspond to the *write* endpoint of your Gaia hub (i.e. you should be able ' +
-        "to run 'curl \"$GAIA_HUB/hub_info\"' successfully).  If you are using Blockstack PBC's default " +
-        'Gaia hub, this argument should be "https://hub.blockstack.org".\n' +
-        '\n' +
-        'WARNING: At this time, no validation will occur on the registrar URL.  Be sure that the URL ' +
-        'corresponds to the registrar for the on-chain name before running this command!\n' +
-        '\n' +
-        'Example:\n' +
-        '\n' +
-        '    $ export OWNER="6e50431b955fe73f079469b24f06480aee44e4519282686433195b3c4b5336ef01"\n' +
-        '    $ # NOTE: https://registrar.blockstack.org is the registrar for personal.id!\n' +
-        '    $ stx register_subdomain hello.personal.id "$OWNER" https://hub.blockstack.org https://registrar.blockstack.org\n',
-      group: 'Blockstack ID Management',
-    },
+    // todo: implement register_subdomain
+    // register_subdomain: {
+    //   type: 'array',
+    //   items: [
+    //     {
+    //       name: 'blockstack_id',
+    //       type: 'string',
+    //       realtype: 'blockstack_id',
+    //       pattern: SUBDOMAIN_PATTERN,
+    //     },
+    //     {
+    //       name: 'owner_key',
+    //       type: 'string',
+    //       realtype: 'private_key',
+    //       pattern: PRIVATE_KEY_PATTERN,
+    //     },
+    //     {
+    //       name: 'gaia_hub',
+    //       type: 'string',
+    //       realtype: 'url',
+    //     },
+    //     {
+    //       name: 'registrar',
+    //       type: 'string',
+    //       realtype: 'url',
+    //     },
+    //     {
+    //       name: 'zonefile',
+    //       type: 'string',
+    //       realtype: 'path',
+    //     },
+    //   ],
+    //   minItems: 4,
+    //   maxItems: 5,
+    //   help:
+    //     'Register a subdomain.  This will generate and sign a subdomain zone file record ' +
+    //     'with the given `GAIA_HUB` URL and send it to the given subdomain registrar (`REGISTRAR`).\n' +
+    //     '\n' +
+    //     'This command generates, signs, and uploads a profile to the `GAIA_HUB` url.  Note that the `GAIA_HUB` ' +
+    //     'argument must correspond to the *write* endpoint of your Gaia hub (i.e. you should be able ' +
+    //     "to run 'curl \"$GAIA_HUB/hub_info\"' successfully).  If you are using Blockstack PBC's default " +
+    //     'Gaia hub, this argument should be "https://hub.blockstack.org".\n' +
+    //     '\n' +
+    //     'WARNING: At this time, no validation will occur on the registrar URL.  Be sure that the URL ' +
+    //     'corresponds to the registrar for the on-chain name before running this command!\n' +
+    //     '\n' +
+    //     'Example:\n' +
+    //     '\n' +
+    //     '    $ export OWNER="6e50431b955fe73f079469b24f06480aee44e4519282686433195b3c4b5336ef01"\n' +
+    //     '    $ # NOTE: https://registrar.blockstack.org is the registrar for personal.id!\n' +
+    //     '    $ stx register_subdomain hello.personal.id "$OWNER" https://hub.blockstack.org https://registrar.blockstack.org\n',
+    //   group: 'Blockstack ID Management',
+    // },
     revoke: {
       type: 'array',
       items: [
@@ -2296,7 +2354,7 @@ export const CLI_ARGS = {
         '    $ stx send_tokens SP1P10PS2T517S4SQGZT5WNX8R00G1ECTRKYCPMHY 12345 1 0 "$PAYMENT"\n' +
         '     {\n' +
         "       txid: '0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'," +
-        "       transaction: 'https://explorer.stacks.co/txid/0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'" +
+        "       transaction: 'https://explorer.hiro.so/txid/0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'" +
         '     }\n' +
         '    a9d387a925fb0ba7a725fb1e11f2c3f1647473699dd5a147c312e6453d233456\n' +
         '\n' +
@@ -2363,7 +2421,7 @@ export const CLI_ARGS = {
         '    $ stx stack 10000000 20 16pm276FpJYpm7Dv3GEaRqTVvGPTdceoY4 136ff26efa5db6f06b28f9c8c7a0216a1a52598045162abfe435d13036154a1b01\n' +
         '     {\n' +
         "       txid: '0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'," +
-        "       transaction: 'https://explorer.stacks.co/txid/0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'" +
+        "       transaction: 'https://explorer.hiro.so/txid/0x2e33ad647a9cedacb718ce247967dc705bc0c878db899fdba5eae2437c6fa1e1'" +
         '     }\n',
       group: 'Account Management',
     },
@@ -2450,16 +2508,10 @@ export const CLI_ARGS = {
       type: 'array',
       items: [
         {
-          name: 'blockstack_id',
+          name: 'fully-qualified-name',
           type: 'string',
-          realtype: 'on-chain-blockstack_id',
+          realtype: 'on-chain-fully-qualified-name',
           pattern: NAME_PATTERN,
-        },
-        {
-          name: 'id_address',
-          type: 'string',
-          realtype: 'id-address',
-          pattern: ID_ADDRESS_PATTERN,
         },
         {
           name: 'payment_key',
@@ -2467,9 +2519,19 @@ export const CLI_ARGS = {
           realtype: 'private_key',
           pattern: `${PRIVATE_KEY_PATTERN_ANY}`,
         },
+        {
+          name: 'salt',
+          type: 'string',
+          realtype: 'text',
+        },
+        {
+          name: 'stx_to_burn',
+          type: 'string',
+          realtype: 'number',
+        },
       ],
-      minItems: 3,
-      maxItems: 3,
+      minItems: 4,
+      maxItems: 4,
       help:
         'Generate and send `NAME_PREORDER` transaction, for a Blockstack ID to be owned ' +
         'by a given `ID_ADDRESS`.  The name cost will be paid for by the gven `PAYMENT_KEY`.  The ' +
@@ -2477,7 +2539,13 @@ export const CLI_ARGS = {
         'generating the name preorder hash.\n' +
         '\n' +
         'This is a low-level command that only experienced Blockstack developers should use.  ' +
-        'If you just want to register a name, use the "register" command.\n',
+        'If you just want to register a name, use the "register" command.\n' +
+        '\n' +
+        'Example:\n' +
+        '\n' +
+        '    $ export PAYMENT="136ff26efa5db6f06b28f9c8c7a0216a1a52598045162abfe435d13036154a1b01"\n' +
+        '    $ stx tx_preorder example.id "$PAYMENT" salt 1000' +
+        '\n',
       group: 'Blockstack ID Management',
     },
     tx_register: {
@@ -2595,9 +2663,9 @@ export const CLI_ARGS = {
         '    }\n' +
         '    \n' +
         '    $ # send out the new zone file to a Blockstack peer\n' +
-        '    $ stx -H https://core.blockstack.org zonefile_push /tmp/zonefile.txt\n' +
+        '    $ stx -H https://stacks-node-api.stacks.co zonefile_push /tmp/zonefile.txt\n' +
         '    [\n' +
-        '      "https://core.blockstack.org"\n' +
+        '      "https://stacks-node-api.stacks.co"\n' +
         '    ]\n' +
         '\n',
       group: 'Blockstack ID Management',
@@ -2656,9 +2724,9 @@ export const CLI_ARGS = {
         '\n' +
         'Example:\n' +
         '\n' +
-        '    $ stx -H https://core.blockstack.org zonefile_push /path/to/zonefile.txt\n' +
+        '    $ stx -H https://stacks-node-api.stacks.co zonefile_push /path/to/zonefile.txt\n' +
         '    [\n' +
-        '      "https://core.blockstack.org"\n' +
+        '      "https://stacks-node-api.stacks.co"\n' +
         '    ]\n' +
         '\n',
       group: 'Peer Services',
@@ -2741,6 +2809,8 @@ Options can be:
 
     -t                  Use the public testnet instead of mainnet.
 
+    -l                  Use the local testnet instead of mainnet.
+
     -i                  Use integration test framework instead of mainnet.
 
     -U                  Unsafe mode.  No safety checks will be performed.
@@ -2777,7 +2847,7 @@ Options can be:
                         (DANGEROUS)
 
     -T URL              Use an alternative Blockstack transaction broadcaster.
-    
+
     -X URL              Use an alternative UTXO service endpoint.
 
     -u USERNAME         A username to be passed to bitcoind RPC endpoints
@@ -2846,7 +2916,7 @@ interface CLI_COMMAND_HELP {
 
 function formatCommandHelpLines(
   commandName: string,
-  commandArgs: Array<CLI_PROP_ITEM>
+  commandArgs: CLI_PROP_ITEM[]
 ): CLI_COMMAND_HELP {
   let rawUsage = '';
   let kwUsage = '';
@@ -3066,7 +3136,7 @@ interface CLI_OPTS {
 
 export function getCLIOpts(
   argv: string[],
-  opts: string = 'deitUxC:F:B:P:D:G:N:H:T:I:m:M:X:u:p:'
+  opts: string = 'deitlUxC:F:B:P:D:G:N:H:T:I:m:M:X:u:p:c:'
 ): CLI_OPTS {
   const optsTable: CLI_OPTS = {};
   const remainingArgv = [];
@@ -3164,7 +3234,7 @@ export function CLIOptAsStringArray(opts: CLI_OPTS, key: string): string[] | nul
  * Use the CLI schema to get all positional and keyword args
  * for a given command.
  */
-export function getCommandArgs(command: string, argsList: Array<string>) {
+export function getCommandArgs(command: string, argsList: string[]) {
   let commandProps = CLI_ARGS.properties[command].items;
   if (!Array.isArray(commandProps)) {
     commandProps = [commandProps];
@@ -3259,7 +3329,7 @@ export function getCommandArgs(command: string, argsList: Array<string>) {
 export interface CheckArgsSuccessType {
   success: true;
   command: string;
-  args: Array<string>;
+  args: string[];
 }
 
 export interface CheckArgsFailType {
@@ -3269,7 +3339,7 @@ export interface CheckArgsFailType {
   usage: boolean;
 }
 
-export function checkArgs(argList: Array<string>): CheckArgsSuccessType | CheckArgsFailType {
+export function checkArgs(argList: string[]): CheckArgsSuccessType | CheckArgsFailType {
   if (argList.length <= 2) {
     return {
       success: false,
@@ -3319,7 +3389,7 @@ export function checkArgs(argList: Array<string>): CheckArgsSuccessType | CheckA
     }
   }
 
-  const ajv = Ajv();
+  const ajv = new Ajv();
   const valid = ajv.validate(commandSchema, commandArgs);
   if (!valid) {
     let errorMsg = '';
@@ -3351,10 +3421,10 @@ export function checkArgs(argList: Array<string>): CheckArgsSuccessType | CheckA
  * If no config file exists, then return the default config.
  *
  * @configPath (string) the path to the config file.
- * @networkType (sring) 'mainnet', 'regtest', or 'testnet'
+ * @networkType (sring) 'mainnet', 'localnet', or 'testnet'
  */
 export function loadConfig(configFile: string, networkType: string): CLI_CONFIG_TYPE {
-  if (networkType !== 'mainnet' && networkType !== 'testnet' && networkType != 'regtest') {
+  if (networkType !== 'mainnet' && networkType !== 'testnet' && networkType != 'localnet') {
     throw new Error('Unregognized network');
   }
 
@@ -3362,8 +3432,8 @@ export function loadConfig(configFile: string, networkType: string): CLI_CONFIG_
 
   if (networkType === 'mainnet') {
     configRet = Object.assign({}, CONFIG_DEFAULTS);
-  } else if (networkType === 'regtest') {
-    configRet = Object.assign({}, CONFIG_REGTEST_DEFAULTS);
+  } else if (networkType === 'localnet') {
+    configRet = Object.assign({}, CONFIG_LOCALNET_DEFAULTS);
   } else {
     configRet = Object.assign({}, CONFIG_TESTNET_DEFAULTS);
   }

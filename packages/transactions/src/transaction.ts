@@ -1,5 +1,15 @@
 import {
+  bytesToHex,
+  concatArray,
+  hexToBytes,
+  IntegerType,
+  intToBigInt,
+  writeUInt32BE,
+} from '@stacks/common';
+import {
   AnchorMode,
+  anchorModeFromNameOrValue,
+  AnchorModeName,
   AuthType,
   ChainID,
   DEFAULT_CHAIN_ID,
@@ -12,25 +22,30 @@ import {
 
 import {
   Authorization,
-  createMessageSignature,
-  createTransactionAuthField,
+  deserializeAuthorization,
+  intoInitialSighashAuth,
   isSingleSig,
   nextSignature,
-  SingleSigSpendingCondition,
-  SpendingCondition,
+  serializeAuthorization,
+  setFee,
+  setNonce,
+  setSponsor,
+  setSponsorNonce,
+  SpendingConditionOpts,
+  verifyOrigin,
 } from './authorization';
+import { createTransactionAuthField } from './signature';
 
-import { BufferArray, cloneDeep, txidFromData } from './utils';
+import { cloneDeep, txidFromData } from './utils';
 
-import { deserializePayload, Payload, serializePayload } from './payload';
+import { deserializePayload, Payload, PayloadInput, serializePayload } from './payload';
 
 import { createLPList, deserializeLPList, LengthPrefixedList, serializeLPList } from './types';
 
 import { isCompressed, StacksPrivateKey, StacksPublicKey } from './keys';
 
-import { BufferReader } from './bufferReader';
+import { BytesReader } from './bytesReader';
 
-import BigNum from 'bn.js';
 import { SerializationError, SigningError } from './errors';
 
 export class StacksTransaction {
@@ -45,30 +60,39 @@ export class StacksTransaction {
   constructor(
     version: TransactionVersion,
     auth: Authorization,
-    payload: Payload,
+    payload: PayloadInput,
     postConditions?: LengthPrefixedList,
     postConditionMode?: PostConditionMode,
-    anchorMode?: AnchorMode,
+    anchorMode?: AnchorModeName | AnchorMode,
     chainId?: ChainID
   ) {
     this.version = version;
     this.auth = auth;
-    this.payload = payload;
+    if ('amount' in payload) {
+      this.payload = {
+        ...payload,
+        amount: intToBigInt(payload.amount, false),
+      };
+    } else {
+      this.payload = payload;
+    }
     this.chainId = chainId ?? DEFAULT_CHAIN_ID;
     this.postConditionMode = postConditionMode ?? PostConditionMode.Deny;
     this.postConditions = postConditions ?? createLPList([]);
 
     if (anchorMode) {
-      this.anchorMode = anchorMode;
+      this.anchorMode = anchorModeFromNameOrValue(anchorMode);
     } else {
       switch (payload.payloadType) {
         case PayloadType.Coinbase:
+        case PayloadType.CoinbaseToAltRecipient:
         case PayloadType.PoisonMicroblock: {
           this.anchorMode = AnchorMode.OnChainOnly;
           break;
         }
         case PayloadType.ContractCall:
         case PayloadType.SmartContract:
+        case PayloadType.VersionedSmartContract:
         case PayloadType.TokenTransfer: {
           this.anchorMode = AnchorMode.Any;
           break;
@@ -79,30 +103,18 @@ export class StacksTransaction {
 
   signBegin() {
     const tx = cloneDeep(this);
-    tx.auth = tx.auth.intoInitialSighashAuth();
+    tx.auth = intoInitialSighashAuth(tx.auth);
     return tx.txid();
   }
 
   verifyBegin() {
     const tx = cloneDeep(this);
-    tx.auth = tx.auth.intoInitialSighashAuth();
+    tx.auth = intoInitialSighashAuth(tx.auth);
     return tx.txid();
   }
 
-  createTxWithSignature(signature: string | Buffer): StacksTransaction {
-    const parsedSig = typeof signature === 'string' ? signature : signature.toString('hex');
-    const tx = cloneDeep(this);
-    if (!tx.auth.spendingCondition) {
-      throw new Error('Cannot set signature on transaction without spending condition');
-    }
-    (tx.auth.spendingCondition as SingleSigSpendingCondition).signature = createMessageSignature(
-      parsedSig
-    );
-    return tx;
-  }
-
   verifyOrigin(): string {
-    return this.auth.verifyOrigin(this.verifyBegin());
+    return verifyOrigin(this.auth, this.verifyBegin());
   }
 
   signNextOrigin(sigHash: string, privateKey: StacksPrivateKey): string {
@@ -116,18 +128,16 @@ export class StacksTransaction {
   }
 
   signNextSponsor(sigHash: string, privateKey: StacksPrivateKey): string {
-    if (this.auth.sponsorSpendingCondition === undefined) {
-      throw new Error('"auth.spendingCondition" is undefined');
+    if (this.auth.authType === AuthType.Sponsored) {
+      return this.signAndAppend(
+        this.auth.sponsorSpendingCondition,
+        sigHash,
+        AuthType.Sponsored,
+        privateKey
+      );
+    } else {
+      throw new Error('"auth.sponsorSpendingCondition" is undefined');
     }
-    if (this.auth.authType === undefined) {
-      throw new Error('"auth.authType" is undefined');
-    }
-    return this.signAndAppend(
-      this.auth.sponsorSpendingCondition,
-      sigHash,
-      AuthType.Sponsored,
-      privateKey
-    );
   }
 
   appendPubkey(publicKey: StacksPublicKey) {
@@ -146,7 +156,7 @@ export class StacksTransaction {
   }
 
   signAndAppend(
-    condition: SpendingCondition,
+    condition: SpendingConditionOpts,
     curSigHash: string,
     authType: AuthType,
     privateKey: StacksPrivateKey
@@ -161,7 +171,7 @@ export class StacksTransaction {
     if (isSingleSig(condition)) {
       condition.signature = nextSig;
     } else {
-      const compressed = privateKey.data.toString('hex').endsWith('01');
+      const compressed = bytesToHex(privateKey.data).endsWith('01');
       condition.fields.push(
         createTransactionAuthField(
           compressed ? PubKeyEncoding.Compressed : PubKeyEncoding.Uncompressed,
@@ -178,42 +188,46 @@ export class StacksTransaction {
     return txidFromData(serialized);
   }
 
-  setSponsor(sponsorSpendingCondition: SpendingCondition) {
+  setSponsor(sponsorSpendingCondition: SpendingConditionOpts) {
     if (this.auth.authType != AuthType.Sponsored) {
       throw new SigningError('Cannot sponsor sign a non-sponsored transaction');
     }
 
-    this.auth.setSponsor(sponsorSpendingCondition);
+    this.auth = setSponsor(this.auth, sponsorSpendingCondition);
   }
 
   /**
    * Set the total fee to be paid for this transaction
    *
-   * @param {BigNum} fee - the fee amount in microstacks
+   * @param fee - the fee amount in microstacks
    */
-  setFee(amount: BigNum) {
-    this.auth.setFee(amount);
+  setFee(amount: IntegerType) {
+    this.auth = setFee(this.auth, amount);
   }
 
   /**
    * Set the transaction nonce
    *
-   * @param {BigNum} nonce - the nonce value
+   * @param nonce - the nonce value
    */
-  setNonce(nonce: BigNum) {
-    this.auth.setNonce(nonce);
+  setNonce(nonce: IntegerType) {
+    this.auth = setNonce(this.auth, nonce);
   }
 
   /**
    * Set the transaction sponsor nonce
    *
-   * @param {BigNum} nonce - the sponsor nonce value
+   * @param nonce - the sponsor nonce value
    */
-  setSponsorNonce(nonce: BigNum) {
-    this.auth.setSponsorNonce(nonce);
+  setSponsorNonce(nonce: IntegerType) {
+    if (this.auth.authType != AuthType.Sponsored) {
+      throw new SigningError('Cannot sponsor sign a non-sponsored transaction');
+    }
+
+    this.auth = setSponsorNonce(this.auth, nonce);
   }
 
-  serialize(): Buffer {
+  serialize(): Uint8Array {
     if (this.version === undefined) {
       throw new SerializationError('"version" is undefined');
     }
@@ -230,51 +244,51 @@ export class StacksTransaction {
       throw new SerializationError('"payload" is undefined');
     }
 
-    const bufferArray: BufferArray = new BufferArray();
+    const bytesArray = [];
 
-    bufferArray.appendByte(this.version);
-    const chainIdBuffer = Buffer.alloc(4);
-    chainIdBuffer.writeUInt32BE(this.chainId, 0);
-    bufferArray.push(chainIdBuffer);
-    bufferArray.push(this.auth.serialize());
-    bufferArray.appendByte(this.anchorMode);
-    bufferArray.appendByte(this.postConditionMode);
-    bufferArray.push(serializeLPList(this.postConditions));
-    bufferArray.push(serializePayload(this.payload));
+    bytesArray.push(this.version);
+    const chainIdBytes = new Uint8Array(4);
+    writeUInt32BE(chainIdBytes, this.chainId, 0);
+    bytesArray.push(chainIdBytes);
+    bytesArray.push(serializeAuthorization(this.auth));
+    bytesArray.push(this.anchorMode);
+    bytesArray.push(this.postConditionMode);
+    bytesArray.push(serializeLPList(this.postConditions));
+    bytesArray.push(serializePayload(this.payload));
 
-    return bufferArray.concatBuffer();
+    return concatArray(bytesArray);
   }
 }
 
 /**
- * @param data Buffer or hex string
+ * @param data Uint8Array or hex string
  */
-export function deserializeTransaction(data: BufferReader | Buffer | string) {
-  let bufferReader: BufferReader;
+export function deserializeTransaction(data: BytesReader | Uint8Array | string) {
+  let bytesReader: BytesReader;
   if (typeof data === 'string') {
     if (data.slice(0, 2).toLowerCase() === '0x') {
-      bufferReader = new BufferReader(Buffer.from(data.slice(2), 'hex'));
+      bytesReader = new BytesReader(hexToBytes(data.slice(2)));
     } else {
-      bufferReader = new BufferReader(Buffer.from(data, 'hex'));
+      bytesReader = new BytesReader(hexToBytes(data));
     }
-  } else if (Buffer.isBuffer(data)) {
-    bufferReader = new BufferReader(data);
+  } else if (data instanceof Uint8Array) {
+    bytesReader = new BytesReader(data);
   } else {
-    bufferReader = data;
+    bytesReader = data;
   }
-  const version = bufferReader.readUInt8Enum(TransactionVersion, n => {
+  const version = bytesReader.readUInt8Enum(TransactionVersion, n => {
     throw new Error(`Could not parse ${n} as TransactionVersion`);
   });
-  const chainId = bufferReader.readUInt32BE();
-  const auth = Authorization.deserialize(bufferReader);
-  const anchorMode = bufferReader.readUInt8Enum(AnchorMode, n => {
+  const chainId = bytesReader.readUInt32BE();
+  const auth = deserializeAuthorization(bytesReader);
+  const anchorMode = bytesReader.readUInt8Enum(AnchorMode, n => {
     throw new Error(`Could not parse ${n} as AnchorMode`);
   });
-  const postConditionMode = bufferReader.readUInt8Enum(PostConditionMode, n => {
+  const postConditionMode = bytesReader.readUInt8Enum(PostConditionMode, n => {
     throw new Error(`Could not parse ${n} as PostConditionMode`);
   });
-  const postConditions = deserializeLPList(bufferReader, StacksMessageType.PostCondition);
-  const payload = deserializePayload(bufferReader);
+  const postConditions = deserializeLPList(bytesReader, StacksMessageType.PostCondition);
+  const payload = deserializePayload(bytesReader);
 
   return new StacksTransaction(
     version,

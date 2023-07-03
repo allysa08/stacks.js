@@ -1,18 +1,23 @@
-// eslint-disable-next-line import/no-unassigned-import
-import 'cross-fetch/polyfill';
-
-import { TokenSigner, SECP256K1Client } from 'jsontokens';
-import { makeUUID4, nextMonth, getGlobalObject } from '@stacks/common';
-import { makeDIDFromAddress } from './dids';
 import {
-  encryptECIES,
+  bytesToHex,
+  bytesToUtf8,
+  getGlobalObject,
+  hexToBytes,
+  makeUUID4,
+  nextMonth,
+  utf8ToBytes,
+} from '@stacks/common';
+import {
   decryptECIES,
+  encryptECIES,
   makeECPrivateKey,
-  publicKeyToAddress,
+  publicKeyToBtcAddress,
 } from '@stacks/encryption';
-import { DEFAULT_SCOPE, AuthScope } from './constants';
+import { SECP256K1Client, TokenSigner } from 'jsontokens';
+import { AuthScope, DEFAULT_SCOPE } from './constants';
+import { makeDIDFromAddress } from './dids';
 
-const VERSION = '1.3.1';
+const VERSION = '1.4.0';
 
 type AuthMetadata = {
   email?: string;
@@ -31,6 +36,9 @@ export function generateTransitKey() {
   const transitKey = makeECPrivateKey();
   return transitKey;
 }
+
+/** @deprecated {@link makeAuthRequest} was renamed to {@link makeAuthRequestToken} */
+export const makeAuthRequest = makeAuthRequestToken;
 
 /**
  * Generates an authentication request that can be sent to the Blockstack
@@ -53,7 +61,7 @@ export function generateTransitKey() {
  * by special authenticators.
  * @return {String} the authentication request
  */
-export function makeAuthRequest(
+export function makeAuthRequestToken(
   transitPrivateKey: string,
   redirectURI?: string,
   manifestURI?: string,
@@ -101,7 +109,7 @@ export function makeAuthRequest(
   /* Convert the private key to a public key to an issuer */
   const publicKey = SECP256K1Client.derivePublicKey(transitPrivateKey);
   payload.public_keys = [publicKey];
-  const address = publicKeyToAddress(publicKey);
+  const address = publicKeyToBtcAddress(publicKey);
   payload.iss = makeDIDFromAddress(address);
 
   /* Sign and return the token */
@@ -121,9 +129,9 @@ export function makeAuthRequest(
  * @ignore
  */
 export async function encryptPrivateKey(publicKey: string, privateKey: string): Promise<string> {
-  const encryptedObj = await encryptECIES(publicKey, Buffer.from(privateKey), true);
+  const encryptedObj = await encryptECIES(publicKey, utf8ToBytes(privateKey), true);
   const encryptedJSON = JSON.stringify(encryptedObj);
-  return Buffer.from(encryptedJSON).toString('hex');
+  return bytesToHex(utf8ToBytes(encryptedJSON));
 }
 
 /**
@@ -141,7 +149,7 @@ export async function decryptPrivateKey(
   privateKey: string,
   hexedEncrypted: string
 ): Promise<string | null> {
-  const unhexedString = Buffer.from(hexedEncrypted, 'hex').toString();
+  const unhexedString = bytesToUtf8(hexToBytes(hexedEncrypted));
   const encryptedObj = JSON.parse(unhexedString);
   const decrypted = await decryptECIES(privateKey, encryptedObj);
   if (typeof decrypted !== 'string') {
@@ -159,7 +167,6 @@ export async function decryptPrivateKey(
  * @param  {String} privateKey the identity key of the Blockstack ID generating
  * the authentication response
  * @param  {Object} profile the profile object for the Blockstack ID
- * @param  {String} username the username of the Blockstack ID if any, otherwise `null`
  * @param  {AuthMetadata} metadata an object containing metadata sent as part of the authentication
  * response including `email` if requested and available and a URL to the profile
  * @param  {String} coreToken core session token when responding to a legacy auth request
@@ -179,8 +186,8 @@ export async function decryptPrivateKey(
  */
 export async function makeAuthResponse(
   privateKey: string,
+  // eslint-disable-next-line @typescript-eslint/ban-types
   profile: {} = {},
-  username: string | null = null,
   metadata: AuthMetadata | null,
   coreToken: string | null = null,
   appPrivateKey: string | null = null,
@@ -188,11 +195,12 @@ export async function makeAuthResponse(
   transitPublicKey: string | null = null,
   hubUrl: string | null = null,
   blockstackAPIUrl: string | null = null,
-  associationToken: string | null = null
+  associationToken: string | null = null,
+  appPrivateKeyFromWalletSalt: string | null = null
 ): Promise<string> {
   /* Convert the private key to a public key to an issuer */
   const publicKey = SECP256K1Client.derivePublicKey(privateKey);
-  const address = publicKeyToAddress(publicKey);
+  const address = publicKeyToBtcAddress(publicKey);
 
   /* See if we should encrypt with the transit key */
   let privateKeyPayload = appPrivateKey;
@@ -228,8 +236,8 @@ export async function makeAuthResponse(
       iss: makeDIDFromAddress(address),
       private_key: privateKeyPayload,
       public_keys: [publicKey],
+      appPrivateKeyFromWalletSalt,
       profile,
-      username,
       core_token: coreTokenPayload,
     },
     additionalProperties

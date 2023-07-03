@@ -15,16 +15,16 @@ import {
 } from './profileSchemas/personUtils';
 
 // TODO: bring into this monorepo/convert to ts
-// eslint-disable-next-line @typescript-eslint/ban-ts-ignore
 // @ts-ignore
 import { makeZoneFile, parseZoneFile } from 'zone-file';
 
 // Could not find a declaration file for module
-// eslint-disable-next-line @typescript-eslint/ban-ts-ignore
 // @ts-ignore
 import * as inspector from 'schema-inspector';
 
-import { Logger, fetchPrivate } from '@stacks/common';
+import { Logger } from '@stacks/common';
+import { createFetchFn, FetchFn } from '@stacks/network';
+import { PublicPersonProfile } from './types';
 
 const schemaDefinition: { [key: string]: any } = {
   type: 'object',
@@ -36,7 +36,6 @@ const schemaDefinition: { [key: string]: any } = {
 
 /**
  * Represents a user profile
- *
  */
 export class Profile {
   _profile: { [key: string]: any };
@@ -166,7 +165,7 @@ const personSchemaDefinition = {
  * @ignore
  */
 export class Person extends Profile {
-  constructor(profile = {}) {
+  constructor(profile: PublicPersonProfile = { '@type': 'Person' }) {
     super(profile);
     this._profile = Object.assign(
       {},
@@ -183,7 +182,7 @@ export class Person extends Profile {
   }
 
   static fromToken(token: string, publicKeyOrAddress: string | null = null): Person {
-    const profile = extractProfile(token, publicKeyOrAddress);
+    const profile = extractProfile(token, publicKeyOrAddress) as PublicPersonProfile;
     return new Person(profile);
   }
 
@@ -304,12 +303,21 @@ export function getTokenFileUrl(zoneFileJson: any): string | null {
   if (zoneFileJson.uri.length < 1) {
     return null;
   }
-  const firstUriRecord = zoneFileJson.uri[0];
 
-  if (!firstUriRecord.hasOwnProperty('target')) {
+  const validRecords = zoneFileJson.uri.filter(
+    (record: any) => record.hasOwnProperty('target') && record.name === '_http._tcp'
+  );
+
+  if (validRecords.length < 1) {
     return null;
   }
-  let tokenFileUrl = firstUriRecord.target;
+
+  const firstValidRecord = validRecords[0];
+
+  if (!firstValidRecord.hasOwnProperty('target')) {
+    return null;
+  }
+  let tokenFileUrl = firstValidRecord.target;
 
   if (tokenFileUrl.startsWith('https')) {
     // pass
@@ -329,7 +337,11 @@ export function getTokenFileUrl(zoneFileJson: any): string | null {
  *
  * @ignore
  */
-export function resolveZoneFileToProfile(zoneFile: any, publicKeyOrAddress: string) {
+export function resolveZoneFileToProfile(
+  zoneFile: any,
+  publicKeyOrAddress: string,
+  fetchFn: FetchFn = createFetchFn()
+): Promise<Record<string, any>> {
   return new Promise((resolve, reject) => {
     let zoneFileJson = null;
     try {
@@ -345,19 +357,15 @@ export function resolveZoneFileToProfile(zoneFile: any, publicKeyOrAddress: stri
     if (zoneFileJson && Object.keys(zoneFileJson).length > 0) {
       tokenFileUrl = getTokenFileUrl(zoneFileJson);
     } else {
-      let profile = null;
       try {
-        profile = JSON.parse(zoneFile);
-        profile = Person.fromLegacyFormat(profile).profile();
+        return resolve(Person.fromLegacyFormat(JSON.parse(zoneFile)).profile());
       } catch (error) {
-        reject(error);
+        return reject(error);
       }
-      resolve(profile);
-      return;
     }
 
     if (tokenFileUrl) {
-      fetchPrivate(tokenFileUrl)
+      fetchFn(tokenFileUrl)
         .then(response => response.text())
         .then(responseText => JSON.parse(responseText))
         .then(responseJson => {

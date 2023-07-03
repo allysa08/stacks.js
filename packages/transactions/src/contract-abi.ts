@@ -16,6 +16,7 @@ import {
 import { ContractCallPayload } from './payload';
 import { NotImplementedError } from './errors';
 import { stringAsciiCV, stringUtf8CV } from './clarity/types/stringCV';
+import { utf8ToBytes } from '@stacks/common';
 
 // From https://github.com/blockstack/stacks-blockchain-sidecar/blob/master/src/event-stream/contract-abi.ts
 
@@ -171,7 +172,7 @@ function encodeClarityValue(
     case ClarityAbiTypeId.ClarityAbiTypeNone:
       return noneCV();
     case ClarityAbiTypeId.ClarityAbiTypeBuffer:
-      return bufferCV(Buffer.from(val, 'utf8'));
+      return bufferCV(utf8ToBytes(val));
     case ClarityAbiTypeId.ClarityAbiTypeStringAscii:
       return stringAsciiCV(val);
     case ClarityAbiTypeId.ClarityAbiTypeStringUtf8:
@@ -327,7 +328,7 @@ function matchType(cv: ClarityValue, abiType: ClarityAbiType): boolean {
     case ClarityType.List:
       return (
         union.id == ClarityAbiTypeId.ClarityAbiTypeList &&
-        union.type.list.length === cv.list.length &&
+        union.type.list.length >= cv.list.length &&
         cv.list.every(val => matchType(val, union.type.list.type))
       );
     case ClarityType.Tuple:
@@ -439,7 +440,7 @@ export function parseToCV(input: string, type: ClarityAbiType): ClarityValue {
       throw new Error(`Contract function contains unsupported Clarity ABI type: ${typeString}`);
     }
   } else if (isClarityAbiBuffer(type)) {
-    const inputLength = Buffer.from(input).byteLength;
+    const inputLength = utf8ToBytes(input).byteLength;
     if (inputLength > type.buffer.length) {
       throw new Error(`Input exceeds specified buffer length limit of ${type.buffer.length}`);
     }

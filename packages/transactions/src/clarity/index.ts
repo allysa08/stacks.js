@@ -1,15 +1,11 @@
-import {
-  ClarityValue,
-  ClarityType,
-  getCVTypeString,
-  cvToString,
-  cvToJSON,
-  cvToValue,
-} from './clarityValue';
-import { BooleanCV, TrueCV, FalseCV, trueCV, falseCV } from './types/booleanCV';
+import { ClarityValue, getCVTypeString, cvToString, cvToJSON, cvToValue } from './clarityValue';
+import { ClarityType } from './constants';
+import { BooleanCV, TrueCV, FalseCV, trueCV, falseCV, boolCV } from './types/booleanCV';
 import { IntCV, UIntCV, intCV, uintCV } from './types/intCV';
 import { BufferCV, bufferCV, bufferCVFromString } from './types/bufferCV';
-import { OptionalCV, NoneCV, SomeCV, noneCV, someCV } from './types/optionalCV';
+import { OptionalCV, NoneCV, SomeCV, noneCV, someCV, optionalCVOf } from './types/optionalCV';
+
+// todo: reduce manual re-exporting
 
 import {
   ResponseCV,
@@ -28,11 +24,19 @@ import {
   contractPrincipalCVFromAddress,
   PrincipalCV,
   contractPrincipalCVFromStandard,
+  principalCV,
+  principalToString,
 } from './types/principalCV';
 
 import { ListCV, listCV } from './types/listCV';
 import { TupleCV, tupleCV } from './types/tupleCV';
-import { StringAsciiCV, StringUtf8CV, stringUtf8CV, stringAsciiCV } from './types/stringCV';
+import {
+  StringAsciiCV,
+  StringUtf8CV,
+  stringUtf8CV,
+  stringAsciiCV,
+  stringCV,
+} from './types/stringCV';
 import { serializeCV } from './serialize';
 import deserializeCV from './deserialize';
 
@@ -63,6 +67,7 @@ export {
 
 // Value construction functions
 export {
+  boolCV,
   trueCV,
   falseCV,
   intCV,
@@ -71,8 +76,10 @@ export {
   bufferCVFromString,
   noneCV,
   someCV,
+  optionalCVOf,
   responseOkCV,
   responseErrorCV,
+  principalCV,
   standardPrincipalCV,
   standardPrincipalCVFromAddress,
   contractPrincipalCV,
@@ -80,6 +87,7 @@ export {
   contractPrincipalCVFromStandard,
   listCV,
   tupleCV,
+  stringCV,
   stringAsciiCV,
   stringUtf8CV,
   getCVTypeString,
@@ -89,4 +97,4 @@ export {
 export { serializeCV, deserializeCV };
 
 // toString
-export { cvToString, cvToJSON, cvToValue };
+export { cvToString, cvToJSON, cvToValue, principalToString };

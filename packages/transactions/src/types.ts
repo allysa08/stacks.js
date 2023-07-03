@@ -1,39 +1,62 @@
 import {
-  MAX_STRING_LENGTH_BYTES,
+  bytesToHex,
+  bytesToUtf8,
+  concatArray,
+  hexToBytes,
+  hexToInt,
+  intToBytes,
+  intToHex,
+  utf8ToBytes,
+} from '@stacks/common';
+import {
   MEMO_MAX_LENGTH_BYTES,
   AddressHashMode,
   AddressVersion,
   TransactionVersion,
   StacksMessageType,
   PostConditionPrincipalID,
+  PostConditionType,
+  FungibleConditionCode,
+  NonFungibleConditionCode,
 } from './constants';
 
 import { StacksPublicKey, serializePublicKey, deserializePublicKey, isCompressed } from './keys';
 
 import {
-  BufferArray,
-  intToHexString,
-  hexStringToInt,
   exceedsMaxLengthBytes,
   hashP2PKH,
   rightPadHexToLength,
   hashP2SH,
+  hashP2WSH,
+  hashP2WPKH,
 } from './utils';
 
-import { c32addressDecode, c32address } from 'c32check';
-import { BufferReader } from './bufferReader';
-import { PostCondition, serializePostCondition, deserializePostCondition } from './postcondition';
+import { BytesReader } from './bytesReader';
+import {
+  PostCondition,
+  StandardPrincipal,
+  ContractPrincipal,
+  PostConditionPrincipal,
+  LengthPrefixedString,
+  AssetInfo,
+  createLPString,
+} from './postcondition-types';
 import { Payload, deserializePayload, serializePayload } from './payload';
 import { DeserializationError } from './errors';
 import {
   deserializeTransactionAuthField,
   deserializeMessageSignature,
-  MessageSignature,
   serializeMessageSignature,
   serializeTransactionAuthField,
   TransactionAuthField,
-} from './authorization';
-
+} from './signature';
+import {
+  MessageSignature,
+  Address,
+  addressHashModeToVersion,
+  addressFromVersionHash,
+} from './common';
+import { deserializeCV, serializeCV } from './clarity';
 export type StacksMessage =
   | Address
   | PostConditionPrincipal
@@ -47,7 +70,7 @@ export type StacksMessage =
   | TransactionAuthField
   | MessageSignature;
 
-export function serializeStacksMessage(message: StacksMessage): Buffer {
+export function serializeStacksMessage(message: StacksMessage): Uint8Array {
   switch (message.type) {
     case StacksMessageType.Address:
       return serializeAddress(message);
@@ -75,52 +98,37 @@ export function serializeStacksMessage(message: StacksMessage): Buffer {
 }
 
 export function deserializeStacksMessage(
-  bufferReader: BufferReader,
+  bytesReader: BytesReader,
   type: StacksMessageType,
   listType?: StacksMessageType
 ): StacksMessage {
   switch (type) {
     case StacksMessageType.Address:
-      return deserializeAddress(bufferReader);
+      return deserializeAddress(bytesReader);
     case StacksMessageType.Principal:
-      return deserializePrincipal(bufferReader);
+      return deserializePrincipal(bytesReader);
     case StacksMessageType.LengthPrefixedString:
-      return deserializeLPString(bufferReader);
+      return deserializeLPString(bytesReader);
     case StacksMessageType.MemoString:
-      return deserializeMemoString(bufferReader);
+      return deserializeMemoString(bytesReader);
     case StacksMessageType.AssetInfo:
-      return deserializeAssetInfo(bufferReader);
+      return deserializeAssetInfo(bytesReader);
     case StacksMessageType.PostCondition:
-      return deserializePostCondition(bufferReader);
+      return deserializePostCondition(bytesReader);
     case StacksMessageType.PublicKey:
-      return deserializePublicKey(bufferReader);
+      return deserializePublicKey(bytesReader);
     case StacksMessageType.Payload:
-      return deserializePayload(bufferReader);
+      return deserializePayload(bytesReader);
     case StacksMessageType.LengthPrefixedList:
       if (!listType) {
         throw new DeserializationError('No List Type specified');
       }
-      return deserializeLPList(bufferReader, listType);
+      return deserializeLPList(bytesReader, listType);
     case StacksMessageType.MessageSignature:
-      return deserializeMessageSignature(bufferReader);
+      return deserializeMessageSignature(bytesReader);
     default:
       throw new Error('Could not recognize StacksMessageType');
   }
-}
-
-export interface Address {
-  readonly type: StacksMessageType.Address;
-  readonly version: AddressVersion;
-  readonly hash160: string;
-}
-
-export function createAddress(c32AddressString: string): Address {
-  const addressData = c32addressDecode(c32AddressString);
-  return {
-    type: StacksMessageType.Address,
-    version: addressData[0],
-    hash160: addressData[1],
-  };
 }
 
 export function createEmptyAddress(): Address {
@@ -129,48 +137,6 @@ export function createEmptyAddress(): Address {
     version: AddressVersion.MainnetSingleSig,
     hash160: '0'.repeat(40),
   };
-}
-
-export function addressFromVersionHash(version: AddressVersion, hash: string): Address {
-  return { type: StacksMessageType.Address, version, hash160: hash };
-}
-
-/**
- * Translates the tx auth hash mode to the corresponding address version.
- * @see https://github.com/blockstack/stacks-blockchain/blob/master/sip/sip-005-blocks-and-transactions.md#transaction-authorization
- */
-export function addressHashModeToVersion(
-  hashMode: AddressHashMode,
-  txVersion: TransactionVersion
-): AddressVersion {
-  switch (hashMode) {
-    case AddressHashMode.SerializeP2PKH:
-      switch (txVersion) {
-        case TransactionVersion.Mainnet:
-          return AddressVersion.MainnetSingleSig;
-        case TransactionVersion.Testnet:
-          return AddressVersion.TestnetSingleSig;
-        default:
-          throw new Error(
-            `Unexpected txVersion ${JSON.stringify(txVersion)} for hashMode ${hashMode}`
-          );
-      }
-    case AddressHashMode.SerializeP2SH:
-    case AddressHashMode.SerializeP2WPKH:
-    case AddressHashMode.SerializeP2WSH:
-      switch (txVersion) {
-        case TransactionVersion.Mainnet:
-          return AddressVersion.MainnetMultiSig;
-        case TransactionVersion.Testnet:
-          return AddressVersion.TestnetMultiSig;
-        default:
-          throw new Error(
-            `Unexpected txVersion ${JSON.stringify(txVersion)} for hashMode ${hashMode}`
-          );
-      }
-    default:
-      throw new Error(`Unexpected hashMode ${JSON.stringify(hashMode)}`);
-  }
 }
 
 export function addressFromHashMode(
@@ -209,108 +175,51 @@ export function addressFromPublicKeys(
   switch (hashMode) {
     case AddressHashMode.SerializeP2PKH:
       return addressFromVersionHash(version, hashP2PKH(publicKeys[0].data));
+    case AddressHashMode.SerializeP2WPKH:
+      return addressFromVersionHash(version, hashP2WPKH(publicKeys[0].data));
     case AddressHashMode.SerializeP2SH:
       return addressFromVersionHash(version, hashP2SH(numSigs, publicKeys.map(serializePublicKey)));
-    default:
-      throw Error(
-        `Not yet implemented: address construction using public keys for hash mode: ${hashMode}`
+    case AddressHashMode.SerializeP2WSH:
+      return addressFromVersionHash(
+        version,
+        hashP2WSH(numSigs, publicKeys.map(serializePublicKey))
       );
   }
 }
 
-export function addressToString(address: Address): string {
-  return c32address(address.version, address.hash160).toString();
+export function serializeAddress(address: Address): Uint8Array {
+  const bytesArray = [];
+  bytesArray.push(hexToBytes(intToHex(address.version, 1)));
+  bytesArray.push(hexToBytes(address.hash160));
+  return concatArray(bytesArray);
 }
 
-export function serializeAddress(address: Address): Buffer {
-  const bufferArray: BufferArray = new BufferArray();
-  bufferArray.appendHexString(intToHexString(address.version, 1));
-  bufferArray.appendHexString(address.hash160);
-
-  return bufferArray.concatBuffer();
-}
-
-export function deserializeAddress(bufferReader: BufferReader): Address {
-  const version = hexStringToInt(bufferReader.readBuffer(1).toString('hex'));
-  const data = bufferReader.readBuffer(20).toString('hex');
+export function deserializeAddress(bytesReader: BytesReader): Address {
+  const version = hexToInt(bytesToHex(bytesReader.readBytes(1)));
+  const data = bytesToHex(bytesReader.readBytes(20));
 
   return { type: StacksMessageType.Address, version, hash160: data };
 }
 
-export type PostConditionPrincipal = StandardPrincipal | ContractPrincipal;
-
-export interface StandardPrincipal {
-  readonly type: StacksMessageType.Principal;
-  readonly prefix: PostConditionPrincipalID.Standard;
-  readonly address: Address;
-}
-
-export interface ContractPrincipal {
-  readonly type: StacksMessageType.Principal;
-  readonly prefix: PostConditionPrincipalID.Contract;
-  readonly address: Address;
-  readonly contractName: LengthPrefixedString;
-}
-
-/**
- * Parses a principal string for either a standard principal or contract principal.
- * @param principalString - String in the format `{address}.{contractName}`
- * @example "SP13N5TE1FBBGRZD1FCM49QDGN32WAXM2E5F8WT2G.example-contract"
- * @example "SP13N5TE1FBBGRZD1FCM49QDGN32WAXM2E5F8WT2G"
- */
-export function parsePrincipalString(
-  principalString: string
-): StandardPrincipal | ContractPrincipal {
-  if (principalString.includes('.')) {
-    const [address, contractName] = principalString.split('.');
-    return createContractPrincipal(address, contractName);
-  } else {
-    return createStandardPrincipal(principalString);
-  }
-}
-
-export function createStandardPrincipal(addressString: string): StandardPrincipal {
-  const addr = createAddress(addressString);
-  return {
-    type: StacksMessageType.Principal,
-    prefix: PostConditionPrincipalID.Standard,
-    address: addr,
-  };
-}
-
-export function createContractPrincipal(
-  addressString: string,
-  contractName: string
-): ContractPrincipal {
-  const addr = createAddress(addressString);
-  const name = createLPString(contractName);
-  return {
-    type: StacksMessageType.Principal,
-    prefix: PostConditionPrincipalID.Contract,
-    address: addr,
-    contractName: name,
-  };
-}
-
-export function serializePrincipal(principal: PostConditionPrincipal): Buffer {
-  const bufferArray: BufferArray = new BufferArray();
-  bufferArray.push(Buffer.from([principal.prefix]));
-  bufferArray.push(serializeAddress(principal.address));
+export function serializePrincipal(principal: PostConditionPrincipal): Uint8Array {
+  const bytesArray = [];
+  bytesArray.push(principal.prefix);
+  bytesArray.push(serializeAddress(principal.address));
   if (principal.prefix === PostConditionPrincipalID.Contract) {
-    bufferArray.push(serializeLPString(principal.contractName));
+    bytesArray.push(serializeLPString(principal.contractName));
   }
-  return bufferArray.concatBuffer();
+  return concatArray(bytesArray);
 }
 
-export function deserializePrincipal(bufferReader: BufferReader): PostConditionPrincipal {
-  const prefix = bufferReader.readUInt8Enum(PostConditionPrincipalID, _ => {
-    throw new DeserializationError('Unexpected Principal payload type: ${n}');
+export function deserializePrincipal(bytesReader: BytesReader): PostConditionPrincipal {
+  const prefix = bytesReader.readUInt8Enum(PostConditionPrincipalID, n => {
+    throw new DeserializationError(`Unexpected Principal payload type: ${n}`);
   });
-  const address = deserializeAddress(bufferReader);
+  const address = deserializeAddress(bytesReader);
   if (prefix === PostConditionPrincipalID.Standard) {
     return { type: StacksMessageType.Principal, prefix, address } as StandardPrincipal;
   }
-  const contractName = deserializeLPString(bufferReader);
+  const contractName = deserializeLPString(bytesReader);
   return {
     type: StacksMessageType.Principal,
     prefix,
@@ -319,60 +228,28 @@ export function deserializePrincipal(bufferReader: BufferReader): PostConditionP
   } as ContractPrincipal;
 }
 
-export interface LengthPrefixedString {
-  readonly type: StacksMessageType.LengthPrefixedString;
-  readonly content: string;
-  readonly lengthPrefixBytes: number;
-  readonly maxLengthBytes: number;
-}
-
-export function createLPString(content: string): LengthPrefixedString;
-export function createLPString(content: string, lengthPrefixBytes: number): LengthPrefixedString;
-export function createLPString(
-  content: string,
-  lengthPrefixBytes: number,
-  maxLengthBytes: number
-): LengthPrefixedString;
-export function createLPString(
-  content: string,
-  lengthPrefixBytes?: number,
-  maxLengthBytes?: number
-): LengthPrefixedString {
-  const prefixLength = lengthPrefixBytes || 1;
-  const maxLength = maxLengthBytes || MAX_STRING_LENGTH_BYTES;
-  if (exceedsMaxLengthBytes(content, maxLength)) {
-    throw new Error(`String length exceeds maximum bytes ${maxLength.toString()}`);
-  }
-  return {
-    type: StacksMessageType.LengthPrefixedString,
-    content,
-    lengthPrefixBytes: prefixLength,
-    maxLengthBytes: maxLength,
-  };
-}
-
 export function serializeLPString(lps: LengthPrefixedString) {
-  const bufferArray: BufferArray = new BufferArray();
-  const contentBuffer = Buffer.from(lps.content);
-  const length = contentBuffer.byteLength;
-  bufferArray.appendHexString(intToHexString(length, lps.lengthPrefixBytes));
-  bufferArray.push(contentBuffer);
-  return bufferArray.concatBuffer();
+  const bytesArray = [];
+  const contentBytes = utf8ToBytes(lps.content);
+  const length = contentBytes.byteLength;
+  bytesArray.push(hexToBytes(intToHex(length, lps.lengthPrefixBytes)));
+  bytesArray.push(contentBytes);
+  return concatArray(bytesArray);
 }
 
 export function deserializeLPString(
-  bufferReader: BufferReader,
+  bytesReader: BytesReader,
   prefixBytes?: number,
   maxLength?: number
 ): LengthPrefixedString {
   prefixBytes = prefixBytes ? prefixBytes : 1;
-  const length = hexStringToInt(bufferReader.readBuffer(prefixBytes).toString('hex'));
-  const content = bufferReader.readBuffer(length).toString();
+  const length = hexToInt(bytesToHex(bytesReader.readBytes(prefixBytes)));
+  const content = bytesToUtf8(bytesReader.readBytes(length));
   return createLPString(content, prefixBytes, maxLength ?? 128);
 }
 
 export function codeBodyString(content: string): LengthPrefixedString {
-  return createLPString(content, 4, 100000);
+  return createLPString(content, 4, 100_000);
 }
 
 export interface MemoString {
@@ -382,72 +259,38 @@ export interface MemoString {
 
 export function createMemoString(content: string): MemoString {
   if (content && exceedsMaxLengthBytes(content, MEMO_MAX_LENGTH_BYTES)) {
-    throw new Error(`Memo exceeds maximum length of ${MEMO_MAX_LENGTH_BYTES.toString()} bytes`);
+    throw new Error(`Memo exceeds maximum length of ${MEMO_MAX_LENGTH_BYTES} bytes`);
   }
   return { type: StacksMessageType.MemoString, content };
 }
 
-export function serializeMemoString(memoString: MemoString): Buffer {
-  const bufferArray: BufferArray = new BufferArray();
-  const contentBuffer = Buffer.from(memoString.content);
-  const paddedContent = rightPadHexToLength(
-    contentBuffer.toString('hex'),
-    MEMO_MAX_LENGTH_BYTES * 2
-  );
-  bufferArray.push(Buffer.from(paddedContent, 'hex'));
-  return bufferArray.concatBuffer();
+export function serializeMemoString(memoString: MemoString): Uint8Array {
+  const bytesArray = [];
+  const contentBytes = utf8ToBytes(memoString.content);
+  const paddedContent = rightPadHexToLength(bytesToHex(contentBytes), MEMO_MAX_LENGTH_BYTES * 2);
+  bytesArray.push(hexToBytes(paddedContent));
+  return concatArray(bytesArray);
 }
 
-export function deserializeMemoString(bufferReader: BufferReader): MemoString {
-  const content = bufferReader.readBuffer(MEMO_MAX_LENGTH_BYTES).toString();
+export function deserializeMemoString(bytesReader: BytesReader): MemoString {
+  const content = bytesToUtf8(bytesReader.readBytes(MEMO_MAX_LENGTH_BYTES));
   return { type: StacksMessageType.MemoString, content };
 }
 
-export interface AssetInfo {
-  readonly type: StacksMessageType.AssetInfo;
-  readonly address: Address;
-  readonly contractName: LengthPrefixedString;
-  readonly assetName: LengthPrefixedString;
+export function serializeAssetInfo(info: AssetInfo): Uint8Array {
+  const bytesArray = [];
+  bytesArray.push(serializeAddress(info.address));
+  bytesArray.push(serializeLPString(info.contractName));
+  bytesArray.push(serializeLPString(info.assetName));
+  return concatArray(bytesArray);
 }
 
-/**
- * Parse a fully qualified string that identifies the token type.
- * @param id - String in the format `{address}.{contractName}::{assetName}`
- * @example "SP13N5TE1FBBGRZD1FCM49QDGN32WAXM2E5F8WT2G.example-contract::example-token"
- */
-export function parseAssetInfoString(id: string): AssetInfo {
-  const [assetAddress, assetContractName, assetTokenName] = id.split(/\.|::/);
-  const assetInfo = createAssetInfo(assetAddress, assetContractName, assetTokenName);
-  return assetInfo;
-}
-
-export function createAssetInfo(
-  addressString: string,
-  contractName: string,
-  assetName: string
-): AssetInfo {
+export function deserializeAssetInfo(bytesReader: BytesReader): AssetInfo {
   return {
     type: StacksMessageType.AssetInfo,
-    address: createAddress(addressString),
-    contractName: createLPString(contractName),
-    assetName: createLPString(assetName),
-  };
-}
-
-export function serializeAssetInfo(info: AssetInfo): Buffer {
-  const bufferArray: BufferArray = new BufferArray();
-  bufferArray.push(serializeAddress(info.address));
-  bufferArray.push(serializeLPString(info.contractName));
-  bufferArray.push(serializeLPString(info.assetName));
-  return bufferArray.concatBuffer();
-}
-
-export function deserializeAssetInfo(bufferReader: BufferReader): AssetInfo {
-  return {
-    type: StacksMessageType.AssetInfo,
-    address: deserializeAddress(bufferReader),
-    contractName: deserializeLPString(bufferReader),
-    assetName: deserializeLPString(bufferReader),
+    address: deserializeAddress(bytesReader),
+    contractName: deserializeLPString(bytesReader),
+    assetName: deserializeLPString(bytesReader),
   };
 }
 
@@ -468,47 +311,130 @@ export function createLPList<T extends StacksMessage>(
   };
 }
 
-export function serializeLPList(lpList: LengthPrefixedList): Buffer {
+export function serializeLPList(lpList: LengthPrefixedList): Uint8Array {
   const list = lpList.values;
-  const bufferArray: BufferArray = new BufferArray();
-  bufferArray.appendHexString(intToHexString(list.length, lpList.lengthPrefixBytes));
-  for (let index = 0; index < list.length; index++) {
-    bufferArray.push(serializeStacksMessage(list[index]));
+  const bytesArray = [];
+  bytesArray.push(hexToBytes(intToHex(list.length, lpList.lengthPrefixBytes)));
+  for (const l of list) {
+    bytesArray.push(serializeStacksMessage(l));
   }
-  return bufferArray.concatBuffer();
+  return concatArray(bytesArray);
 }
 
 export function deserializeLPList(
-  bufferReader: BufferReader,
+  bytesReader: BytesReader,
   type: StacksMessageType,
   lengthPrefixBytes?: number
 ): LengthPrefixedList {
-  const length = hexStringToInt(bufferReader.readBuffer(lengthPrefixBytes || 4).toString('hex'));
+  const length = hexToInt(bytesToHex(bytesReader.readBytes(lengthPrefixBytes || 4)));
+
   const l: StacksMessage[] = [];
   for (let index = 0; index < length; index++) {
     switch (type) {
       case StacksMessageType.Address:
-        l.push(deserializeAddress(bufferReader));
+        l.push(deserializeAddress(bytesReader));
         break;
       case StacksMessageType.LengthPrefixedString:
-        l.push(deserializeLPString(bufferReader));
+        l.push(deserializeLPString(bytesReader));
         break;
       case StacksMessageType.MemoString:
-        l.push(deserializeMemoString(bufferReader));
+        l.push(deserializeMemoString(bytesReader));
         break;
       case StacksMessageType.AssetInfo:
-        l.push(deserializeAssetInfo(bufferReader));
+        l.push(deserializeAssetInfo(bytesReader));
         break;
       case StacksMessageType.PostCondition:
-        l.push(deserializePostCondition(bufferReader));
+        l.push(deserializePostCondition(bytesReader));
         break;
       case StacksMessageType.PublicKey:
-        l.push(deserializePublicKey(bufferReader));
+        l.push(deserializePublicKey(bytesReader));
         break;
       case StacksMessageType.TransactionAuthField:
-        l.push(deserializeTransactionAuthField(bufferReader));
+        l.push(deserializeTransactionAuthField(bytesReader));
         break;
     }
   }
   return createLPList(l, lengthPrefixBytes);
+}
+
+export function serializePostCondition(postCondition: PostCondition): Uint8Array {
+  const bytesArray = [];
+  bytesArray.push(postCondition.conditionType);
+  bytesArray.push(serializePrincipal(postCondition.principal));
+
+  if (
+    postCondition.conditionType === PostConditionType.Fungible ||
+    postCondition.conditionType === PostConditionType.NonFungible
+  ) {
+    bytesArray.push(serializeAssetInfo(postCondition.assetInfo));
+  }
+
+  if (postCondition.conditionType === PostConditionType.NonFungible) {
+    bytesArray.push(serializeCV(postCondition.assetName));
+  }
+
+  bytesArray.push(postCondition.conditionCode);
+
+  if (
+    postCondition.conditionType === PostConditionType.STX ||
+    postCondition.conditionType === PostConditionType.Fungible
+  ) {
+    bytesArray.push(intToBytes(postCondition.amount, false, 8));
+  }
+
+  return concatArray(bytesArray);
+}
+
+export function deserializePostCondition(bytesReader: BytesReader): PostCondition {
+  const postConditionType = bytesReader.readUInt8Enum(PostConditionType, n => {
+    throw new DeserializationError(`Could not read ${n} as PostConditionType`);
+  });
+
+  const principal = deserializePrincipal(bytesReader);
+
+  let conditionCode;
+  let assetInfo;
+  let amount: bigint;
+  switch (postConditionType) {
+    case PostConditionType.STX:
+      conditionCode = bytesReader.readUInt8Enum(FungibleConditionCode, n => {
+        throw new DeserializationError(`Could not read ${n} as FungibleConditionCode`);
+      });
+      amount = BigInt(`0x${bytesToHex(bytesReader.readBytes(8))}`);
+      return {
+        type: StacksMessageType.PostCondition,
+        conditionType: PostConditionType.STX,
+        principal,
+        conditionCode,
+        amount,
+      };
+    case PostConditionType.Fungible:
+      assetInfo = deserializeAssetInfo(bytesReader);
+      conditionCode = bytesReader.readUInt8Enum(FungibleConditionCode, n => {
+        throw new DeserializationError(`Could not read ${n} as FungibleConditionCode`);
+      });
+      amount = BigInt(`0x${bytesToHex(bytesReader.readBytes(8))}`);
+      return {
+        type: StacksMessageType.PostCondition,
+        conditionType: PostConditionType.Fungible,
+        principal,
+        conditionCode,
+        amount,
+        assetInfo,
+      };
+    case PostConditionType.NonFungible:
+      assetInfo = deserializeAssetInfo(bytesReader);
+      const assetName = deserializeCV(bytesReader);
+      conditionCode = bytesReader.readUInt8Enum(NonFungibleConditionCode, n => {
+        throw new DeserializationError(`Could not read ${n} as FungibleConditionCode`);
+      });
+      return {
+        type: StacksMessageType.PostCondition,
+        conditionType: PostConditionType.NonFungible,
+        principal,
+        conditionCode,
+        assetInfo,
+        assetName,
+      };
+  }
 }

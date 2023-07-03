@@ -3,15 +3,11 @@ import * as URL from 'url';
 import * as crypto from 'crypto';
 import * as jsontokens from 'jsontokens';
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const ZoneFile = require('zone-file');
 
-import {
-  canonicalPrivateKey,
-  getPrivateKeyAddress,
-  checkUrl,
-  SafetyError,
-  getPublicKeyFromPrivateKey,
-} from './utils';
+import { canonicalPrivateKey, getPublicKeyFromPrivateKey } from './utils';
+import { getPrivateKeyAddress } from './common';
 
 import { CLINetworkAdapter, NameInfoType } from './network';
 
@@ -35,7 +31,6 @@ function makeFakeAuthResponseToken(
     '0496345da77fb5e06757b9c4fd656bf830a3b293f245a6cc2f11f8334ebb690f1' +
     '9582124f4b07172eb61187afba4514828f866a8a223e0d5c539b2e38a59ab8bb3';
 
-  // eslint-disable-next-line
   window.localStorage.setItem('blockstack-transit-private-key', transitPrivateKey);
 
   const authResponse = blockstack.makeAuthResponse(
@@ -275,53 +270,11 @@ export function gaiaUploadProfileAll(
 
   return Promise.all(uploadPromises)
     .then(publicUrls => {
-      return { error: null, dataUrls: publicUrls! };
+      return { error: null, dataUrls: publicUrls };
     })
     .catch(e => {
       return { error: `Failed to upload: ${e.message}`, dataUrls: null };
     });
-}
-
-/*
- * Make a zone file from a Gaia hub---reach out to the Gaia hub, get its read URL prefix,
- * and generate a zone file with the profile mapped to the Gaia hub.
- *
- * @network (object) the network connection
- * @name (string) the name that owns the zone file
- * @gaiaHubUrl (string) the URL to the gaia hub write endpoint
- * @ownerKey (string) the owner private key
- *
- * Returns a promise that resolves to the zone file with the profile URL
- */
-export function makeZoneFileFromGaiaUrl(
-  network: CLINetworkAdapter,
-  name: string,
-  gaiaHubUrl: string,
-  ownerKey: string
-) {
-  const address = getPrivateKeyAddress(network, ownerKey);
-  const mainnetAddress = network.coerceMainnetAddress(address);
-
-  return gaiaConnect(network, gaiaHubUrl, ownerKey).then(hubConfig => {
-    if (!hubConfig.url_prefix) {
-      throw new Error('Invalid hub config: no read_url_prefix defined');
-    }
-    const gaiaReadUrl = hubConfig.url_prefix.replace(/\/+$/, '');
-    const profileUrl = `${gaiaReadUrl}/${mainnetAddress}/profile.json`;
-    try {
-      checkUrl(profileUrl);
-    } catch (e) {
-      throw new SafetyError({
-        status: false,
-        error: e.message,
-        hints: [
-          'Make sure the Gaia hub read URL scheme is present and well-formed.',
-          `Check the "read_url_prefix" field of ${gaiaHubUrl}/hub_info`,
-        ],
-      });
-    }
-    return blockstack.makeProfileZoneFile(name, profileUrl);
-  });
 }
 
 /*

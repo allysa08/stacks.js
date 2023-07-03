@@ -1,51 +1,47 @@
 {
+  "extends": "./tsconfig.json",
   "compilerOptions": {
-    "target": "esnext",
-    "module": "esnext",
-    "lib": ["dom", "esnext"],
-    "jsx": "react",
-    "importHelpers": true,
-    "declaration": true,
-    "sourceMap": true,
-    "moduleResolution": "node",
-    "forceConsistentCasingInFileNames": true,
-    "strict": true,
-    "pretty": true,
-    "removeComments": true,
-    "noImplicitAny": true,
-    "strictFunctionTypes": true,
-    "noImplicitThis": true,
-    "alwaysStrict": true,
-    "stripInternal": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "emitDecoratorMetadata": false,
-    "noEmit": false,
-    "experimentalDecorators": true,
-    "allowSyntheticDefaultImports": true,
-    "suppressImplicitAnyIndexErrors": false,
-    "outDir": "./dist",
-    "baseUrl": "./src",
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "strictNullChecks": true,
+    "target": "ES2020",
+    "module": "ES6"
   },
-  "include": [
-    "packages/**/src",
-  ],
   "typedocOptions": {
-    "readme": "overview.md",
-    "mode": "file",
+    "name": "Stacks.js",
+    "entryPointStrategy": "packages",
+    "entryPoints": [
+      // "packages/*", without packages/cli
+      "packages/auth",
+      "packages/encryption",
+      "packages/network",
+      "packages/stacking",
+      "packages/transactions",
+      "packages/bns",
+      "packages/common",
+      "packages/keychain",
+      "packages/profile",
+      "packages/storage",
+      "packages/wallet-sdk",
+    ],
+    "json": "docs/docs.json",
+    "out": "docs",
     "excludePrivate": true,
     "excludeProtected": true,
-    "excludeExternals": true,
-    "excludeNotExported": false,
-    "includes" : "mdincludes",
-    "includeDeclarations": false,
-    "gitRevision": "master",
-    "listInvalidSymbolLinks": true,
-    "theme": "docs-theme"
+    "categoryOrder": [
+      "*",
+      "Other"
+    ],
+    "gaID": "GTM-M8P6G7Z",
+    "theme": "stacks",
+    "replaceText": {
+      "replacements": [
+        {
+          "pattern": "https://github.com/hirosystems/stacks.js/tree/master/packages/wallet-sdk",
+          "replace": "/modules/_stacks_wallet_sdk"
+        },
+        {
+          "pattern": "https://github.com/hirosystems/stacks.js/tree/master/packages/",
+          "replace": "/modules/_stacks_"
+        }
+      ]
+    }
   }
 }
